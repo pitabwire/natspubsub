@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package jetstreampubsub_test
+package natspubsub_test
 
 import (
 	"context"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/jetstreampubsub/connections"
 	"log"
 
 	"github.com/nats-io/nats.go"
@@ -35,17 +36,10 @@ func ExampleOpenSubscription() {
 		log.Fatal(err)
 	}
 	defer natsConn.Close()
+	conn := connections.NewPlain(natsConn)
 
-	js, err := jetstream.New(natsConn)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	subscription, err := jetstreampubsub.OpenSubscription(
-		ctx,
-		js,
-		"example.mysubject",
-		nil)
+	subscription, err := natspubsub.OpenSubscription(
+		ctx, conn, &connections.SubscriptionOptions{ConsumerSubject: "example.mysubject"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -69,14 +63,16 @@ func ExampleOpenTopic() {
 		log.Fatal(err)
 	}
 
-	topic, err := jetstreampubsub.OpenTopic(js, "example.mysubject", nil)
+	conn := connections.NewJetstream(js)
+
+	topic, err := natspubsub.OpenTopic(conn, "example.mysubject", nil)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer topic.Shutdown(ctx)
 }
 
-func Example_openTopicV2FromURL() {
+func Example_openTopicFromURL() {
 	// PRAGMA: This example is used on gocloud.dev; PRAGMA comments adjust how it is shown and can be ignored.
 	// PRAGMA: On gocloud.dev, add a blank import: _ "gocloud.dev/pubsub/natspubsub"
 	// PRAGMA: On gocloud.dev, hide lines until the next blank line.
@@ -87,14 +83,14 @@ func Example_openTopicV2FromURL() {
 	// NATS_SERVER_URL and send messages with subject "example.mysubject".
 	// This URL will be parsed and the natsv2 attribute will be used to
 	// use NATS v2.2.0+ native message headers as the message metadata.
-	topic, err := pubsub.OpenTopic(ctx, "nats://example.mysubject?natsv2")
+	topic, err := pubsub.OpenTopic(ctx, "nats://nats.example.com/example.mysubject")
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer topic.Shutdown(ctx)
 }
 
-func Example_openSubscriptionV2FromURL() {
+func Example_openSubscriptionFromURL() {
 	// PRAGMA: This example is used on gocloud.dev; PRAGMA comments adjust how it is shown and can be ignored.
 	// PRAGMA: On gocloud.dev, add a blank import: _ "gocloud.dev/pubsub/natspubsub"
 	// PRAGMA: On gocloud.dev, hide lines until the next blank line.
@@ -105,7 +101,7 @@ func Example_openSubscriptionV2FromURL() {
 	// NATS_SERVER_URL and receive messages with subject "example.mysubject".
 	// This URL will be parsed and the natsv2 attribute will be used to
 	// use NATS v2.2.0+ native message headers as the message metadata.
-	subscription, err := pubsub.OpenSubscription(ctx, "nats://example.mysubject?natsv2")
+	subscription, err := pubsub.OpenSubscription(ctx, "nats://nats.example.com/example.mysubject?jetstream=true")
 	if err != nil {
 		log.Fatal(err)
 	}
