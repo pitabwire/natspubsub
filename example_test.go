@@ -39,7 +39,7 @@ func ExampleOpenSubscription() {
 	conn := connections.NewPlain(natsConn)
 
 	subscription, err := natspubsub.OpenSubscription(
-		ctx, conn, &connections.SubscriptionOptions{ConsumerSubject: "example.mysubject"})
+		ctx, conn, &connections.SubscriptionOptions{SetupOpts: &connections.SetupOptions{Subjects: []string{"example.mysubject"}}})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func ExampleOpenTopic() {
 
 	conn := connections.NewJetstream(js)
 
-	topic, err := natspubsub.OpenTopic(conn, "example.mysubject", nil)
+	topic, err := natspubsub.OpenTopic(ctx, conn, &connections.TopicOptions{Subject: "example.mysubject"})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func Example_openTopicFromURL() {
 	// PRAGMA: On gocloud.dev, hide lines until the next blank line.
 	ctx := context.Background()
 
-	// pubsub.OpenTopic creates a *pubsub.Topic from a URL.
+	// pubsub.OpenTopic creates a *pubsub.Connection from a URL.
 	// This URL will Dial the NATS server at the URL in the environment variable
 	// NATS_SERVER_URL and send messages with subject "example.mysubject".
 	// This URL will be parsed and the natsv2 attribute will be used to

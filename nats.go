@@ -15,7 +15,7 @@
 // # As
 //
 // natspubsub exposes the following types for use:
-//   - Topic: *nats.Conn
+//   - Connection: *nats.Conn
 //   - Subscription: *nats.Subscription
 //   - Message.BeforeSend: *nats.Msg for v2.
 //   - Message.AfterSend: None.
@@ -49,14 +49,14 @@ import (
 )
 
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
-var errNotTopicInitialized = errors.New("natspubsub: topic not initialized")
+var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
 var errNotSupportedParameter = errors.New("natspubsub: invalid parameter used, only the parameters [subject, " +
 	"stream_name, stream_description, stream_subjects, consumer_max_count, consumer_max_batch_size, " +
-	"consumer_max_batch_bytes_size, consumer_queue, jetstream ] are supported and can be used")
+	"consumer_max_batch_bytes_size, consumer_queue, consumer_batch_timeout, jetstream ] are supported and can be used")
 var allowedParameters = []string{"subject", "stream_name", "stream_description", "stream_subjects",
 	"consumer_max_count", "consumer_max_batch_size", "consumer_max_batch_bytes_size", "consumer_queue",
-	"jetstream"}
+	"jetstream", "consumer_batch_timeout"}
 
 func init() {
 	o := new(defaultDialer)
@@ -114,7 +114,7 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 	return opener, nil
 }
 
-func (o *defaultDialer) createConnection(connectionUrl string, isJetstream bool) (connections.ConnectionMux, error) {
+func (o *defaultDialer) createConnection(connectionUrl string, isJetstream bool) (connections.Connection, error) {
 	natsConn, err := nats.Connect(connectionUrl)
 	if err != nil {
 		return nil, fmt.Errorf("natspubsub: failed to dial server using %q: %v", connectionUrl, err)
@@ -129,7 +129,7 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstream bool)
 		return nil, fmt.Errorf("natspubsub: NATS server version %q is not supported", natsConn.ConnectedServerVersion())
 	}
 
-	var conn connections.ConnectionMux
+	var conn connections.Connection
 	if isJetstream {
 
 		js, err := jetstream.New(natsConn)
@@ -203,7 +203,7 @@ const Scheme = "nats"
 //
 // No query parameters are supported.
 type URLOpener struct {
-	Connection connections.ConnectionMux
+	Connection connections.Connection
 	// TopicOptions specifies the options to pass to OpenTopic.
 	TopicOptions connections.TopicOptions
 	// SubscriptionOptions specifies the options to pass to OpenSubscription.
@@ -219,24 +219,24 @@ type URLOpener struct {
 //		- nats://host:8934/bar?subject=foo --> foo/bar
 //		- nats://host:8934/bar --> /bar
 //		- nats://host:8934?no_subject=foo --> [this yields an error]
-func (o *URLOpener) OpenTopicURL(_ context.Context, u *url.URL) (*pubsub.Topic, error) {
+func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic, error) {
 
 	subject := u.Query().Get("subject")
 
 	subject = path.Join(subject, u.Path)
 	if "" == subject {
-		return nil, errNotTopicInitialized
+		return nil, errNotSubjectInitialized
 	}
 
-	return OpenTopic(o.Connection, subject, &o.TopicOptions)
+	return OpenTopic(ctx, o.Connection, &o.TopicOptions)
 
 }
 
 // OpenSubscriptionURL opens a pubsub.Subscription based on url supplied.
 //
-//		A subscription also creates the required underlaying queue or streams
-//		There are many more parameters checked in this case compared to the publish topic section.
-//		If required the list of parameters can be extended but for now only a subset is defined and
+//	 A subscription also creates the required underlaying queue or streams
+//	 There are many more parameters checked in this case compared to the publish topic section.
+//	 If required the list of parameters can be extended but for now only a subset is defined and
 //	 the remaining ones utilize the sensible defaults that nats comes with.
 //
 //		The list of parameters include :
@@ -254,13 +254,18 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	setupOpts := opts.SetupOpts
 
 	subject := u.Query().Get("subject")
+	subjects := strings.Split(subject, ",")
 
-	subject = path.Join(subject, u.Path)
-	if "" == subject {
-		return nil, errNotTopicInitialized
+	for _, subj := range subjects {
+		subj = path.Join(subj, u.Path)
 	}
-	opts.ConsumerSubject = subject
-	opts.ConsumerQueue = u.Query().Get("consumer_queue")
+
+	if len(subjects) == 0 || "" == subjects[0] {
+		return nil, errNotSubjectInitialized
+	}
+
+	setupOpts.Subjects = subjects
+	setupOpts.DurableQueue = u.Query().Get("consumer_queue")
 
 	opts.ConsumersMaxCount, err = strconv.Atoi(u.Query().Get("consumer_max_count"))
 	if err != nil {
@@ -275,6 +280,11 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 		opts.ConsumerMaxBatchBytesSize = 0
 	}
 
+	opts.ConsumerMaxBatchTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_batch_timeout"))
+	if err != nil {
+		opts.ConsumerMaxBatchTimeoutMs = 10000
+	}
+
 	setupOpts.StreamName = u.Query().Get("stream_name")
 	setupOpts.StreamDescription = u.Query().Get("stream_description")
 	setupOpts.Subjects = strings.Split(u.Query().Get("stream_subjects"), ",")
@@ -286,8 +296,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 }
 
 type topic struct {
-	conn connections.ConnectionMux
-	subj string
+	iTopic connections.Topic
 }
 
 // OpenTopic returns a *pubsub.Topic for use with NATS at least version 2.2.0.
@@ -296,8 +305,8 @@ type topic struct {
 // which limits the subscribers only to Go clients.
 // This implementation uses native NATS message headers, and native message content, which provides full support
 // for non-Go clients.
-func OpenTopic(conn connections.ConnectionMux, subject string, _ *connections.TopicOptions) (*pubsub.Topic, error) {
-	dt, err := openTopic(conn, subject)
+func OpenTopic(ctx context.Context, conn connections.Connection, opts *connections.TopicOptions) (*pubsub.Topic, error) {
+	dt, err := openTopic(ctx, conn, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -306,18 +315,23 @@ func OpenTopic(conn connections.ConnectionMux, subject string, _ *connections.To
 
 // openTopic returns the driver for OpenTopic. This function exists so the test
 // harness can get the driver interface implementation if it needs to.
-func openTopic(conn connections.ConnectionMux, subject string) (driver.Topic, error) {
+func openTopic(ctx context.Context, conn connections.Connection, opts *connections.TopicOptions) (driver.Topic, error) {
 	if conn == nil {
 		return nil, errInvalidUrl
 	}
 
-	return &topic{conn: conn, subj: subject}, nil
+	itopic, err := conn.CreateTopic(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return &topic{iTopic: itopic}, nil
 }
 
-// SendBatch implements driver.Topic.SendBatch.
+// SendBatch implements driver.Connection.SendBatch.
 func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
-	if t == nil || t.conn == nil {
-		return errNotTopicInitialized
+	if t == nil || t.iTopic == nil {
+		return errNotSubjectInitialized
 	}
 
 	for _, m := range msgs {
@@ -336,7 +350,7 @@ func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
 }
 
 func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
-	msg := encodeMessage(m, t.subj)
+	msg := encodeMessage(m, t.iTopic.Subject())
 	if m.BeforeSend != nil {
 		asFunc := func(i interface{}) bool {
 			if nm, ok := i.(**nats.Msg); ok {
@@ -350,7 +364,7 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 		}
 	}
 
-	if _, err := t.conn.PublishMessage(ctx, msg); err != nil {
+	if _, err := t.iTopic.PublishMessage(ctx, msg); err != nil {
 		return err
 	}
 
@@ -363,32 +377,32 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 	return nil
 }
 
-// IsRetryable implements driver.Topic.IsRetryable.
+// IsRetryable implements driver.Connection.IsRetryable.
 func (*topic) IsRetryable(error) bool { return false }
 
-// As implements driver.Topic.As.
+// As implements driver.Connection.As.
 func (t *topic) As(i interface{}) bool {
-	c, ok := i.(*connections.ConnectionMux)
+	c, ok := i.(*connections.Topic)
 	if !ok {
 		return false
 	}
-	*c = t.conn
+	*c = t.iTopic
 	return true
 }
 
-// ErrorAs implements driver.Topic.ErrorAs
+// ErrorAs implements driver.Connection.ErrorAs
 func (*topic) ErrorAs(error, interface{}) bool {
 	return false
 }
 
-// ErrorCode implements driver.Topic.ErrorCode
+// ErrorCode implements driver.Connection.ErrorCode
 func (*topic) ErrorCode(err error) gcerrors.ErrorCode {
 	switch {
 	case err == nil:
 		return gcerrors.OK
 	case errors.Is(err, context.Canceled):
 		return gcerrors.Canceled
-	case errors.Is(err, errNotTopicInitialized):
+	case errors.Is(err, errNotSubjectInitialized):
 		return gcerrors.NotFound
 	case errors.Is(err, nats.ErrBadSubject):
 		return gcerrors.FailedPrecondition
@@ -400,21 +414,21 @@ func (*topic) ErrorCode(err error) gcerrors.ErrorCode {
 	return gcerrors.Unknown
 }
 
-// Close implements driver.Topic.Close.
+// Close implements driver.Connection.Close.
 func (*topic) Close() error { return nil }
 
 type subscription struct {
 	queue connections.Queue
 }
 
-// OpenSubscription returns a *pubsub.Subscription representing a NATS subscription or NATS queue subscription
-// for use with NATS at least version 2.2.0.
+// OpenSubscription returns a *pubsub.Subscription representing a NATS subscription
+// or NATS queue subscription for use with NATS at least version 2.2.0.
 // This changes the encoding of the message as, starting with version 2.2.0, NATS supports message headers.
 // In previous versions the message headers were encoded along with the message content using gob.Encoder,
 // which limits the subscribers only to Go clients.
 // This implementation uses native NATS message headers, and native message content, which provides full support
 // for non-Go clients.
-func OpenSubscription(ctx context.Context, conn connections.ConnectionMux, opts *connections.SubscriptionOptions) (*pubsub.Subscription, error) {
+func OpenSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (*pubsub.Subscription, error) {
 	ds, err := openSubscription(ctx, conn, opts)
 	if err != nil {
 		return nil, err
@@ -425,17 +439,22 @@ func OpenSubscription(ctx context.Context, conn connections.ConnectionMux, opts 
 		maxConsumerCount = 1
 	}
 
+	maxBatchSize := opts.ConsumerMaxBatchSize
+	if maxBatchSize <= 0 {
+		maxBatchSize = 1
+	}
+
 	var recvBatcherOpts = &batcher.Options{
-		MaxBatchSize: opts.ConsumerMaxBatchSize,
+		MaxBatchSize: maxBatchSize,
 		MaxHandlers:  maxConsumerCount, // max concurrency for receives
 	}
 
 	return pubsub.NewSubscription(ds, recvBatcherOpts, nil), nil
 }
 
-func openSubscription(ctx context.Context, conn connections.ConnectionMux, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
+func openSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
 	if opts == nil {
-		return nil, errors.New("natspubsub: Subscription options missing")
+		return nil, errors.New("natspubsub: subscription options missing")
 	}
 
 	queue, err := conn.CreateSubscription(ctx, opts)
@@ -496,7 +515,7 @@ func (*subscription) ErrorCode(err error) gcerrors.ErrorCode {
 		return gcerrors.OK
 	case errors.Is(err, context.Canceled):
 		return gcerrors.Canceled
-	case errors.Is(err, errNotTopicInitialized), errors.Is(err, nats.ErrBadSubscription):
+	case errors.Is(err, errNotSubjectInitialized), errors.Is(err, nats.ErrBadSubscription):
 		return gcerrors.NotFound
 	case errors.Is(err, nats.ErrBadSubject), errors.Is(err, nats.ErrTypeSubscription):
 		return gcerrors.FailedPrecondition

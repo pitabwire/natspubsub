@@ -3,48 +3,77 @@ package connections
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/nats-io/nats.go"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"time"
 )
 
-func NewPlain(natsConn *nats.Conn) ConnectionMux {
-	return &natsConnection{natsConnection: natsConn}
+func NewPlain(natsConn *nats.Conn) Connection {
+	return &plainConnection{natsConnection: natsConn}
 }
 
-type natsConnection struct {
+type plainConnection struct {
 	// Connection to use for communication with the server.
 	natsConnection *nats.Conn
 }
 
-func (c *natsConnection) Raw() interface{} {
+func (c *plainConnection) Raw() interface{} {
 	return c.natsConnection
 }
 
-func (c *natsConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
+func (c *plainConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
 
-	if opts != nil && opts.ConsumerQueue != "" {
+	return &plainNatsTopic{subject: opts.Subject, plainConn: c.natsConnection}, nil
+}
 
-		subsc, err := c.natsConnection.QueueSubscribeSync(opts.ConsumerSubject, opts.ConsumerQueue)
+func (c *plainConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
+
+	fmt.Println("---------------------------------------------------------------------------")
+	fmt.Printf(" subscribing to : [%s] {%s}", opts.SetupOpts.Subjects[0], opts.SetupOpts.DurableQueue)
+	fmt.Println("--------------------------------------------------------------------------")
+
+	sOpts := opts.SetupOpts
+
+	//We force the batch fetch size to 1, as only jetstream enabled connections can do batch fetches
+	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
+	opts.ConsumerMaxBatchSize = 1
+
+	if sOpts.DurableQueue != "" {
+
+		subsc, err := c.natsConnection.QueueSubscribeSync(sOpts.Subjects[0], sOpts.DurableQueue)
 		if err != nil {
 			return nil, err
 		}
 
-		return &natsConsumer{consumer: subsc, durable: true, batchFetchTimeout: 1 * time.Second}, nil
+		return &natsConsumer{consumer: subsc, durable: true,
+			batchFetchTimeout: time.Duration(opts.ConsumerMaxBatchTimeoutMs) * time.Millisecond}, nil
 	}
-	subsc, err := c.natsConnection.SubscribeSync(opts.ConsumerSubject)
+
+	// Using nats without any form of queue mechanism is fine only where
+	// loosing some messages is ok as this essentially is an atmost once delivery situation here.
+	subsc, err := c.natsConnection.SubscribeSync(sOpts.Subjects[0])
 	if err != nil {
 		return nil, err
 	}
 
-	return &natsConsumer{consumer: subsc, durable: false}, nil
+	return &natsConsumer{consumer: subsc, durable: false,
+		batchFetchTimeout: time.Duration(opts.ConsumerMaxBatchTimeoutMs) * time.Millisecond}, nil
 
 }
 
-func (c *natsConnection) PublishMessage(_ context.Context, msg *nats.Msg) (string, error) {
+type plainNatsTopic struct {
+	subject   string
+	plainConn *nats.Conn
+}
+
+func (t *plainNatsTopic) Subject() string {
+	return t.subject
+}
+func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (string, error) {
 	var err error
-	if err = c.natsConnection.PublishMsg(msg); err != nil {
+	if err = t.plainConn.PublishMsg(msg); err != nil {
 		return "", err
 	}
 
@@ -65,24 +94,29 @@ func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()
 }
 
-func (q *natsConsumer) ReceiveMessages(ctx context.Context, _ int) ([]*driver.Message, error) {
+func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchSize int) ([]*driver.Message, error) {
 
 	var messages []*driver.Message
 
-	msg, err := q.consumer.NextMsg(q.batchFetchTimeout)
-	if err != nil {
-		if errors.Is(err, nats.ErrTimeout) {
-			return messages, nil
+	for i := 0; i < batchSize; i++ {
+
+		msg, err := q.consumer.NextMsg(q.batchFetchTimeout)
+		if err != nil {
+			fmt.Printf(" error occurred : [%s] ", err)
+			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+				return messages, nil
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	driverMsg, err := decodeMessage(msg)
+		driverMsg, err := decodeMessage(msg)
 
-	if err != nil {
-		return messages, err
-	}
+		if err != nil {
+			fmt.Printf(" error decoding : [%s] ", err)
+			return nil, err
+		}
 
-	messages = append(messages, driverMsg)
+		messages = append(messages, driverMsg)
+	}
 
 	return messages, nil
 

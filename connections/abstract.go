@@ -16,23 +16,31 @@ type TopicOptions struct {
 type SetupOptions struct {
 	StreamName        string
 	StreamDescription string
-	Subjects          []string
+
+	Subjects     []string
+	DurableQueue string
 }
 
-// SubscriptionOptions sets options for constructing a *pubsub.Subscription
-// backed by NATS.
+// SubscriptionOptions sets options for subscribing to NATS.
+// The appropriate *pubsub.Subscription is created as a result here.
 type SubscriptionOptions struct {
-	ConsumerSubject string
-	ConsumerQueue   string
-
 	ConsumersMaxCount         int
 	ConsumerMaxBatchSize      int
 	ConsumerMaxBatchBytesSize int
+	ConsumerMaxBatchTimeoutMs int
 
 	SetupOpts *SetupOptions
 }
 
 type Queue interface {
+
+	// ReceiveMessages pulls messages from the nats queue server.
+	// If no messages are currently available, this method should block for
+	// no more than about 1 second. It can return an empty
+	// slice of messages and no error. ReceiveBatch will be called again
+	// immediately, so implementations should try to wait for messages for some
+	// non-zero amount of time before returning zero messages. If the underlying
+	// service doesn't support waiting, then a time.Sleep can be used.
 	ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error)
 	Unsubscribe() error
 	Ack(ctx context.Context, ids []driver.AckID) error
@@ -40,9 +48,13 @@ type Queue interface {
 	IsDurable() bool
 }
 
-type ConnectionMux interface {
+type Topic interface {
+	Subject() string
+	PublishMessage(ctx context.Context, msg *nats.Msg) (string, error)
+}
+
+type Connection interface {
 	Raw() interface{}
 	CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error)
-
-	PublishMessage(ctx context.Context, msg *nats.Msg) (string, error)
+	CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error)
 }

@@ -2,15 +2,16 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"strconv"
-	"strings"
+	"time"
 )
 
-func NewJetstream(js jetstream.JetStream) ConnectionMux {
+func NewJetstream(js jetstream.JetStream) Connection {
 	return &jetstreamConnection{jetStream: js}
 }
 
@@ -23,28 +24,25 @@ func (c *jetstreamConnection) Raw() interface{} {
 	return c.jetStream
 }
 
+func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
+
+	return &jetstreamTopic{subject: opts.Subject, jetStream: c.jetStream}, nil
+}
+
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
 	setupOpts := opts.SetupOpts
 
-	if setupOpts == nil {
-		setupOpts = &SetupOptions{
-			StreamName: opts.ConsumerSubject,
-			Subjects:   []string{opts.ConsumerSubject},
-		}
-	}
-
 	stream, err := c.jetStream.Stream(ctx, setupOpts.StreamName)
-	if err != nil && !strings.Contains(err.Error(), "stream not found") {
+	if err != nil &&
+		errors.Is(err, nats.ErrStreamNotFound) {
 		return nil, err
 	}
 
 	if stream == nil {
 
-		streamName := strings.Replace(setupOpts.StreamName, "/", "_", -1)
-
 		streamConfig := jetstream.StreamConfig{
-			Name:         streamName,
+			Name:         setupOpts.StreamName,
 			Description:  setupOpts.StreamDescription,
 			Subjects:     setupOpts.Subjects,
 			MaxConsumers: opts.ConsumersMaxCount,
@@ -57,27 +55,33 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	}
 
-	consumerName := strings.Replace(opts.ConsumerSubject, "/", "_", -1)
-	//consumerQueue := strings.Replace(opts.ConsumerQueue, "/", "_", -1)
-
 	// Create durable consumer
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Name:      consumerName,
-		Durable:   consumerName,
+		Name:      setupOpts.StreamName,
+		Durable:   setupOpts.DurableQueue,
 		AckPolicy: jetstream.AckExplicitPolicy,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return &jetstreamConsumer{consumer: consumer}, nil
+	return &jetstreamConsumer{consumer: consumer, batchFetchTimeout: time.Duration(opts.ConsumerMaxBatchTimeoutMs) * time.Millisecond}, nil
 
 }
 
-func (c *jetstreamConnection) PublishMessage(ctx context.Context, msg *nats.Msg) (string, error) {
+type jetstreamTopic struct {
+	subject   string
+	jetStream jetstream.JetStream
+}
+
+func (t *jetstreamTopic) Subject() string {
+	return t.subject
+}
+
+func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (string, error) {
 	var ack *jetstream.PubAck
 	var err error
-	if ack, err = c.jetStream.PublishMsg(ctx, msg); err != nil {
+	if ack, err = t.jetStream.PublishMsg(ctx, msg); err != nil {
 		return "", err
 	}
 
@@ -85,7 +89,8 @@ func (c *jetstreamConnection) PublishMessage(ctx context.Context, msg *nats.Msg)
 }
 
 type jetstreamConsumer struct {
-	consumer jetstream.Consumer
+	consumer          jetstream.Consumer
+	batchFetchTimeout time.Duration
 }
 
 func (jc *jetstreamConsumer) IsDurable() bool {
@@ -104,7 +109,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		batchCount = 1
 	}
 
-	msgBatch, err := jc.consumer.FetchNoWait(batchCount)
+	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(jc.batchFetchTimeout))
 	if err != nil {
 		return nil, err
 	}
