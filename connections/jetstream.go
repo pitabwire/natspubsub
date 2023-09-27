@@ -100,30 +100,27 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 
 	var messages []*driver.Message
 
+	if batchCount <= 0 {
+		batchCount = 1
+	}
+
 	msgBatch, err := jc.consumer.FetchNoWait(batchCount)
 	if err != nil {
 		return nil, err
 	}
 
-	for {
+	for msg := range msgBatch.Messages() {
 
-		select {
-		case msg, ok := <-msgBatch.Messages():
+		driverMsg, err0 := decodeJetstreamMessage(msg)
 
-			if !ok {
-				return messages, nil
-			}
-
-			driverMsg, err0 := decodeJetstreamMessage(msg)
-
-			if err0 != nil {
-				return nil, err0
-			}
-
-			messages = append(messages, driverMsg)
-
+		if err0 != nil {
+			return nil, err0
 		}
+
+		messages = append(messages, driverMsg)
 	}
+
+	return messages, nil
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
@@ -156,13 +153,13 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 }
 
 func jsMessageAsFunc(msg jetstream.Msg) func(interface{}) bool {
-	return func(i any) bool {
-		p, ok := i.(*jetstream.Msg)
-		if !ok {
-			return false
+	return func(i interface{}) bool {
+		if p, ok := i.(*jetstream.Msg); ok {
+			*p = msg
+			return true
 		}
-		*p = msg
-		return true
+
+		return false
 	}
 }
 

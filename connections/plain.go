@@ -24,23 +24,24 @@ func (c *natsConnection) Raw() interface{} {
 
 func (c *natsConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
-	var subsc *nats.Subscription
-	var err error
-
-	isDurable := false
 	if opts != nil && opts.ConsumerQueue != "" {
-		isDurable = true
-		subsc, err = c.natsConnection.QueueSubscribeSync(opts.ConsumerSubject, opts.ConsumerQueue)
-	} else {
-		subsc, err = c.natsConnection.SubscribeSync(opts.ConsumerSubject)
+
+		subsc, err := c.natsConnection.QueueSubscribeSync(opts.ConsumerSubject, opts.ConsumerQueue)
+		if err != nil {
+			return nil, err
+		}
+
+		return &natsConsumer{consumer: subsc, durable: true, batchFetchTimeout: 1 * time.Second}, nil
 	}
+	subsc, err := c.natsConnection.SubscribeSync(opts.ConsumerSubject)
 	if err != nil {
 		return nil, err
 	}
 
-	return &natsConsumer{consumer: subsc, durable: isDurable}, nil
+	return &natsConsumer{consumer: subsc, durable: false}, nil
 
 }
+
 func (c *natsConnection) PublishMessage(_ context.Context, msg *nats.Msg) (string, error) {
 	var err error
 	if err = c.natsConnection.PublishMsg(msg); err != nil {
@@ -51,8 +52,9 @@ func (c *natsConnection) PublishMessage(_ context.Context, msg *nats.Msg) (strin
 }
 
 type natsConsumer struct {
-	consumer *nats.Subscription
-	durable  bool
+	consumer          *nats.Subscription
+	durable           bool
+	batchFetchTimeout time.Duration
 }
 
 func (q *natsConsumer) IsDurable() bool {
@@ -63,31 +65,27 @@ func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()
 }
 
-func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
+func (q *natsConsumer) ReceiveMessages(ctx context.Context, _ int) ([]*driver.Message, error) {
 
 	var messages []*driver.Message
 
-	msgBatch, err := q.consumer.FetchBatch(batchCount, nats.MaxWait(100*time.Millisecond))
+	msg, err := q.consumer.NextMsg(q.batchFetchTimeout)
 	if err != nil {
 		if errors.Is(err, nats.ErrTimeout) {
-			return nil, nil
+			return messages, nil
 		}
 		return nil, err
 	}
+	driverMsg, err := decodeMessage(msg)
 
-	for msg := range msgBatch.Messages() {
-
-		driverMsg, err0 := decodeMessage(msg)
-
-		if err0 != nil {
-			return nil, err0
-		}
-
-		messages = append(messages, driverMsg)
-
+	if err != nil {
+		return messages, err
 	}
 
+	messages = append(messages, driverMsg)
+
 	return messages, nil
+
 }
 
 func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
@@ -96,8 +94,7 @@ func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 		if !ok {
 			continue
 		}
-
-		_ = msg.AckSync(nats.Context(ctx))
+		_ = msg.Ack()
 	}
 
 	return nil
@@ -109,8 +106,7 @@ func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 		if !ok {
 			continue
 		}
-
-		_ = msg.Nak(nats.Context(ctx))
+		_ = msg.Nak()
 	}
 
 	return nil

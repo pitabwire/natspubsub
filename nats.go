@@ -33,7 +33,7 @@ import (
 	"fmt"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/jetstreampubsub/connections"
+	"github.com/pitabwire/natspubsub/connections"
 	"net/url"
 	"path"
 	"regexp"
@@ -50,6 +50,7 @@ import (
 
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotTopicInitialized = errors.New("natspubsub: topic not initialized")
+var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
 var errNotSupportedParameter = errors.New("natspubsub: invalid parameter used, only the parameters [subject, " +
 	"stream_name, stream_description, stream_subjects, consumer_max_count, consumer_max_batch_size, " +
 	"consumer_max_batch_bytes_size, consumer_queue, jetstream ] are supported and can be used")
@@ -87,10 +88,16 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 		return storedOpener.(*URLOpener), nil
 	}
 
-	for param, _ := range serverUrl.Query() {
-		if slices.Contains(allowedParameters, strings.ToLower(param)) {
+	for param, values := range serverUrl.Query() {
+		paramName := strings.ToLower(param)
+		if slices.Contains(allowedParameters, paramName) {
 			return nil, errNotSupportedParameter
 		}
+
+		if len(values) != 1 {
+			return nil, errDuplicateParameter
+		}
+
 	}
 
 	conn, err := o.createConnection(connectionUrl, serverUrl.Query().Has("jetstream"))
@@ -413,23 +420,25 @@ func OpenSubscription(ctx context.Context, conn connections.ConnectionMux, opts 
 		return nil, err
 	}
 
+	maxConsumerCount := opts.ConsumersMaxCount
+	if maxConsumerCount <= 0 {
+		maxConsumerCount = 1
+	}
+
 	var recvBatcherOpts = &batcher.Options{
-		MaxBatchByteSize: opts.ConsumerMaxBatchBytesSize,
-		MaxBatchSize:     opts.ConsumerMaxBatchSize,
-		MaxHandlers:      opts.ConsumersMaxCount, // max concurrency for receives
+		MaxBatchSize: opts.ConsumerMaxBatchSize,
+		MaxHandlers:  maxConsumerCount, // max concurrency for receives
 	}
 
 	return pubsub.NewSubscription(ds, recvBatcherOpts, nil), nil
 }
 
 func openSubscription(ctx context.Context, conn connections.ConnectionMux, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
-	var err error
-	var queue connections.Queue
 	if opts == nil {
 		return nil, errors.New("natspubsub: Subscription options missing")
 	}
 
-	queue, err = conn.CreateSubscription(ctx, opts)
+	queue, err := conn.CreateSubscription(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -465,12 +474,14 @@ func (s *subscription) IsRetryable(error) bool { return false }
 
 // As implements driver.Subscription.As.
 func (s *subscription) As(i interface{}) bool {
-	c, ok := i.(*connections.Queue)
-	if !ok {
-		return false
+
+	if p, ok := i.(*connections.Queue); ok {
+		*p = s.queue
+		return true
 	}
-	*c = s.queue
-	return true
+
+	return false
+
 }
 
 // ErrorAs implements driver.Subscription.ErrorAs

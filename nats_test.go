@@ -19,7 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/jetstreampubsub/connections"
+	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/pubsub/batcher"
 	"testing"
 
@@ -147,38 +147,38 @@ func (h *harness) MaxBatchSizes() (int, int) { return 0, 0 }
 
 func (*harness) SupportsMultipleSubscriptions() bool { return true }
 
-type natsAsTest struct {
+type plainNatsAsTest struct {
 }
 
-func (natsAsTest) Name() string {
+func (plainNatsAsTest) Name() string {
 	return "nats test"
 }
 
-func (natsAsTest) TopicCheck(topic *pubsub.Topic) error {
+func (plainNatsAsTest) TopicCheck(topic *pubsub.Topic) error {
 	var c2 connections.ConnectionMux
-	if topic.As(&c2) {
+	if topic.As(c2) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &c2)
 	}
-	var c3 *connections.ConnectionMux
+	var c3 connections.ConnectionMux
 	if !topic.As(&c3) {
 		return fmt.Errorf("cast failed for %T", &c3)
 	}
 	return nil
 }
 
-func (natsAsTest) SubscriptionCheck(sub *pubsub.Subscription) error {
+func (plainNatsAsTest) SubscriptionCheck(sub *pubsub.Subscription) error {
 	var c2 connections.Queue
-	if sub.As(&c2) {
+	if sub.As(c2) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &c2)
 	}
-	var c3 *connections.Queue
+	var c3 connections.Queue
 	if !sub.As(&c3) {
 		return fmt.Errorf("cast failed for %T", &c3)
 	}
 	return nil
 }
 
-func (natsAsTest) TopicErrorCheck(t *pubsub.Topic, err error) error {
+func (plainNatsAsTest) TopicErrorCheck(t *pubsub.Topic, err error) error {
 	var dummy string
 	if t.ErrorAs(err, &dummy) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &dummy)
@@ -186,7 +186,7 @@ func (natsAsTest) TopicErrorCheck(t *pubsub.Topic, err error) error {
 	return nil
 }
 
-func (natsAsTest) SubscriptionErrorCheck(s *pubsub.Subscription, err error) error {
+func (plainNatsAsTest) SubscriptionErrorCheck(s *pubsub.Subscription, err error) error {
 	var dummy string
 	if s.ErrorAs(err, &dummy) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &dummy)
@@ -194,9 +194,9 @@ func (natsAsTest) SubscriptionErrorCheck(s *pubsub.Subscription, err error) erro
 	return nil
 }
 
-func (natsAsTest) MessageCheck(m *pubsub.Message) error {
-	var pm nats.Msg
-	if m.As(&pm) {
+func (plainNatsAsTest) MessageCheck(m *pubsub.Message) error {
+	var pm *nats.Msg
+	if m.As(pm) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &pm)
 	}
 	var ppm *nats.Msg
@@ -206,9 +206,9 @@ func (natsAsTest) MessageCheck(m *pubsub.Message) error {
 	return nil
 }
 
-func (n natsAsTest) BeforeSend(as func(interface{}) bool) error {
-	var pm nats.Msg
-	if as(&pm) {
+func (n plainNatsAsTest) BeforeSend(as func(interface{}) bool) error {
+	var pm *nats.Msg
+	if as(pm) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &pm)
 	}
 
@@ -219,17 +219,70 @@ func (n natsAsTest) BeforeSend(as func(interface{}) bool) error {
 	return nil
 }
 
-func (natsAsTest) AfterSend(as func(interface{}) bool) error {
+func (plainNatsAsTest) AfterSend(as func(interface{}) bool) error {
+	return nil
+}
+
+type jetstreamAsTest struct {
+	plainNatsAsTest
+}
+
+func (jetstreamAsTest) TopicCheck(topic *pubsub.Topic) error {
+	var c2 connections.ConnectionMux
+	if topic.As(c2) {
+		return fmt.Errorf("cast succeeded for %T, want failure", &c2)
+	}
+	var c3 connections.ConnectionMux
+	if !topic.As(&c3) {
+		return fmt.Errorf("cast failed for %T", &c3)
+	}
+	return nil
+}
+
+func (jetstreamAsTest) SubscriptionCheck(sub *pubsub.Subscription) error {
+	var c2 connections.Queue
+	if sub.As(c2) {
+		return fmt.Errorf("cast succeeded for %T, want failure", &c2)
+	}
+	var c3 connections.Queue
+	if !sub.As(&c3) {
+		return fmt.Errorf("cast failed for %T", &c3)
+	}
+	return nil
+}
+
+func (jetstreamAsTest) MessageCheck(m *pubsub.Message) error {
+	var pm jetstream.Msg
+	if m.As(pm) {
+		return fmt.Errorf("cast succeeded for %T, want failure", &pm)
+	}
+	var ppm jetstream.Msg
+	if !m.As(&ppm) {
+		return fmt.Errorf("cast failed for %T", ppm)
+	}
+	return nil
+}
+
+func (n jetstreamAsTest) BeforeSend(as func(interface{}) bool) error {
+	var pm nats.Msg
+	if as(pm) {
+		return fmt.Errorf("cast succeeded for %T, want failure", &pm)
+	}
+
+	var ppm *nats.Msg
+	if !as(&ppm) {
+		return fmt.Errorf("cast failed for %T", &ppm)
+	}
 	return nil
 }
 
 func TestConformanceJetstream(t *testing.T) {
-	asTests := []drivertest.AsTest{natsAsTest{}}
+	asTests := []drivertest.AsTest{jetstreamAsTest{}}
 	drivertest.RunConformanceTests(t, newJetstreamHarness, asTests)
 }
 
 func TestConformancePlain(t *testing.T) {
-	asTests := []drivertest.AsTest{natsAsTest{}}
+	asTests := []drivertest.AsTest{plainNatsAsTest{}}
 	drivertest.RunConformanceTests(t, newPlainHarness, asTests)
 }
 

@@ -17,12 +17,12 @@ package natspubsub_test
 import (
 	"context"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/jetstreampubsub/connections"
+	"github.com/pitabwire/natspubsub/connections"
 	"log"
 
 	"github.com/nats-io/nats.go"
 
-	"github.com/pitabwire/jetstreampubsub"
+	"github.com/pitabwire/natspubsub"
 	"gocloud.dev/pubsub"
 )
 
