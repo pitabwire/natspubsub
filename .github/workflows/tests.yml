@@ -35,16 +35,16 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go-version }}
+      - name: Checkout code
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 2  # required for codecov
       - name: Diagnostics
         run: |
           go version
           pwd
           ls
           go list -m all
-      - name: Checkout code
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 2  # required for codecov
       - name: Run Tests
         shell: bash
         run: make build
