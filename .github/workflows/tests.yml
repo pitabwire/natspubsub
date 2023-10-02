@@ -39,9 +39,7 @@ jobs:
         run: |
           go version
           pwd
-          echo $GOROOT
-          echo $GOPATH
-          cd ..
+          ls
           go list -m all
       - name: Checkout code
         uses: actions/checkout@v2
