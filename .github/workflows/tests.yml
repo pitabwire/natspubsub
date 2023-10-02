@@ -35,6 +35,10 @@ jobs:
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go-version }}
+      - name: Diagnostics
+        run: |
+          go version
+          go list -m all
       - name: Checkout code
         uses: actions/checkout@v2
         with:
