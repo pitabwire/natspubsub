@@ -42,4 +42,5 @@ jobs:
         shell: bash
         run: |
           go mod edit -go=1.20
+          go version
           make build

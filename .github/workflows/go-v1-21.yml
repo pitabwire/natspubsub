@@ -40,4 +40,6 @@ jobs:
           fetch-depth: 2  # required for codecov
       - name: Run Tests
         shell: bash
-        run: make build
+        run: |
+          go version
+          make build
