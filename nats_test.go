@@ -17,11 +17,11 @@ package natspubsub
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/pubsub/batcher"
+	"strings"
 	"testing"
 
 	"gocloud.dev/gcerrors"
@@ -98,15 +98,15 @@ func (h *harness) MakeNonexistentTopic(ctx context.Context) (driver.Topic, error
 
 func defaultSubOptions(subject, testName string) *connections.SubscriptionOptions {
 
-	sOpts := &connections.SetupOptions{
-		StreamName:   fmt.Sprintf("test_stream_%s", testName),
-		Subjects:     []string{subject},
-		DurableQueue: testName,
-	}
+	streamName := strings.Replace(testName, "/", "_", -1)
 
 	opts := &connections.SubscriptionOptions{
-		ConsumerMaxBatchTimeoutMs: 1000,
-		SetupOpts:                 sOpts,
+		StreamName:   streamName,
+		Subjects:     []string{subject},
+		DurableQueue: streamName,
+
+		ConsumerName:             streamName,
+		ConsumerRequestTimeoutMs: 1000,
 	}
 	return opts
 }
@@ -124,7 +124,10 @@ func (h *harness) CreateSubscription(ctx context.Context, dt driver.Topic, testN
 	cleanup := func() {
 		var queue connections.Queue
 		if ds.As(&queue) {
-			queue.Unsubscribe()
+			err0 := queue.Unsubscribe()
+			if err0 != nil {
+				return
+			}
 		}
 	}
 	return ds, cleanup, nil
@@ -144,7 +147,10 @@ func (h *harness) CreateQueueSubscription(ctx context.Context, dt driver.Topic, 
 	cleanup := func() {
 		var sub connections.Queue
 		if ds.As(&sub) {
-			sub.Unsubscribe()
+			err0 := sub.Unsubscribe()
+			if err0 != nil {
+				return
+			}
 		}
 	}
 	return ds, cleanup, nil
@@ -388,7 +394,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	js := conn.Raw().(jetstream.JetStream)
 
 	stream, err := js.Stream(ctx, topic)
-	if err != nil && !errors.Is(err, nats.ErrStreamNotFound) {
+	if err != nil && !strings.Contains(err.Error(), "404") {
 		t.Fatal(err)
 	}
 
@@ -573,36 +579,41 @@ func BenchmarkNatsQueuePubSub(b *testing.B) {
 	}
 	defer nc.Close()
 
-	js, err := jetstream.New(nc)
-	if err != nil {
-		b.Fatal(err)
-	}
-
-	conn := connections.NewJetstream(js)
+	conn := connections.NewPlain(nc)
 
 	h := &harness{s: s, conn: conn}
 
-	b.Run("Jetstream", func(b *testing.B) {
-		dt, cleanup, err := h.CreateTopic(ctx, b.Name())
-		if err != nil {
-			b.Fatal(err)
+	b.Run("PlainNats", func(b *testing.B) {
+		dt, cleanup, err1 := h.CreateTopic(ctx, b.Name())
+		if err1 != nil {
+			b.Fatal(err1)
 		}
 		defer cleanup()
 
-		qs, cleanup, err := h.CreateQueueSubscription(ctx, dt, b.Name())
-		if err != nil {
-			b.Fatal(err)
+		qs, cleanupSub, err1 := h.CreateQueueSubscription(ctx, dt, b.Name())
+		if err1 != nil {
+			b.Fatal(err1)
 		}
-		defer cleanup()
+		defer cleanupSub()
 
 		topic := pubsub.NewTopic(dt, nil)
-		defer topic.Shutdown(ctx)
+		defer func(topic *pubsub.Topic, ctx context.Context) {
+			err3 := topic.Shutdown(ctx)
+			if err3 != nil {
+
+			}
+		}(topic, ctx)
 
 		queueSub := pubsub.NewSubscription(qs, &batcher.Options{
 			MaxBatchSize: 100,
 			MaxHandlers:  10, // max concurrency for receives
 		}, nil)
-		defer queueSub.Shutdown(ctx)
+		defer func(queueSub *pubsub.Subscription, ctx context.Context) {
+			err5 := queueSub.Shutdown(ctx)
+			if err5 != nil {
+
+			}
+		}(queueSub, ctx)
 
 		drivertest.RunBenchmarks(b, topic, queueSub)
 	})
@@ -701,7 +712,7 @@ func TestOpenSubscriptionFromURL(t *testing.T) {
 		// Invalid parameter.
 		{"nats://localhost:11222/mytopic?param=value", true},
 		// Queue URL Parameter for QueueSubscription.
-		{"nats://localhost:11222/mytopic?queue=queue1", false},
+		{"nats://localhost:11222/mytopic?consumer_queue=queue1", false},
 		// Multiple values for Queue URL Parameter for QueueSubscription.
 		{"nats://localhost:11222/mytopic?subject=queue1&subject=queue2", true},
 	}

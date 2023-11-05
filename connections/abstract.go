@@ -11,25 +11,30 @@ type TopicOptions struct {
 	Subject string
 }
 
-// SetupOptions sets options utilized especially when creating streams/queues
+// SubscriptionOptions sets options for subscribing to NATS.
+// Stream Options are useful for initial setup especially when creating streams/queues
 // these will later be subscribed to by the consumers of nats messages.
-type SetupOptions struct {
+// The appropriate *pubsub.Subscription is created as a result here.
+type SubscriptionOptions struct {
 	StreamName        string
 	StreamDescription string
 
 	Subjects     []string
 	DurableQueue string
-}
 
-// SubscriptionOptions sets options for subscribing to NATS.
-// The appropriate *pubsub.Subscription is created as a result here.
-type SubscriptionOptions struct {
-	ConsumersMaxCount         int
-	ConsumerMaxBatchSize      int
-	ConsumerMaxBatchBytesSize int
-	ConsumerMaxBatchTimeoutMs int
+	ConsumerName string
 
-	SetupOpts *SetupOptions
+	ConsumersMaxCount            int
+	ConsumerRequestBatch         int
+	ConsumerRequestMaxBatchBytes int
+	ConsumerRequestTimeoutMs     int
+	ConsumerAckWaitTimeoutMs     int
+
+	//The maximum number of fetch requests that are all waiting in parrallel to receive messages.
+	//This prevents building up too many requests that the server will have to distribute to for a given consumer.
+	ConsumerMaxWaiting int
+
+	ConsumerMaxAckPending int
 }
 
 type Queue interface {

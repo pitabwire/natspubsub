@@ -31,9 +31,7 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
-	setupOpts := opts.SetupOpts
-
-	stream, err := c.jetStream.Stream(ctx, setupOpts.StreamName)
+	stream, err := c.jetStream.Stream(ctx, opts.StreamName)
 	if err != nil &&
 		errors.Is(err, nats.ErrStreamNotFound) {
 		return nil, err
@@ -42,9 +40,9 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 	if stream == nil {
 
 		streamConfig := jetstream.StreamConfig{
-			Name:         setupOpts.StreamName,
-			Description:  setupOpts.StreamDescription,
-			Subjects:     setupOpts.Subjects,
+			Name:         opts.StreamName,
+			Description:  opts.StreamDescription,
+			Subjects:     opts.Subjects,
 			MaxConsumers: opts.ConsumersMaxCount,
 		}
 
@@ -57,15 +55,22 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	// Create durable consumer
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
-		Name:      setupOpts.StreamName,
-		Durable:   setupOpts.DurableQueue,
+		Name:      opts.ConsumerName,
+		Durable:   opts.DurableQueue,
 		AckPolicy: jetstream.AckExplicitPolicy,
+
+		AckWait:            time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
+		MaxWaiting:         opts.ConsumerMaxWaiting,
+		MaxAckPending:      opts.ConsumerMaxAckPending,
+		MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+		MaxRequestBatch:    opts.ConsumerRequestBatch,
+		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return &jetstreamConsumer{consumer: consumer, batchFetchTimeout: time.Duration(opts.ConsumerMaxBatchTimeoutMs) * time.Millisecond}, nil
+	return &jetstreamConsumer{consumer: consumer}, nil
 
 }
 
@@ -89,8 +94,7 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 }
 
 type jetstreamConsumer struct {
-	consumer          jetstream.Consumer
-	batchFetchTimeout time.Duration
+	consumer jetstream.Consumer
 }
 
 func (jc *jetstreamConsumer) IsDurable() bool {
@@ -101,7 +105,7 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 	return nil
 }
 
-func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
+func (jc *jetstreamConsumer) ReceiveMessages(_ context.Context, batchCount int) ([]*driver.Message, error) {
 
 	var messages []*driver.Message
 
@@ -109,7 +113,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		batchCount = 1
 	}
 
-	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(jc.batchFetchTimeout))
+	msgBatch, err := jc.consumer.Fetch(batchCount)
 	if err != nil {
 		return nil, err
 	}

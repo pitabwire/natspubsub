@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// # As
 //
 // natspubsub exposes the following types for use:
 //   - Connection: *nats.Conn
@@ -48,15 +47,18 @@ import (
 	"gocloud.dev/pubsub/driver"
 )
 
+var allowedParameters = []string{"subject", "stream_name", "stream_description", "stream_subjects",
+	"consumer_max_count", "consumer_request_batch", "consumer_request_max_batch_bytes", "consumer_queue",
+	"jetstream", "consumer_request_timeout_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
+	"consumer_max_ack_pending"}
+
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
-var errNotSupportedParameter = errors.New("natspubsub: invalid parameter used, only the parameters [subject, " +
-	"stream_name, stream_description, stream_subjects, consumer_max_count, consumer_max_batch_size, " +
-	"consumer_max_batch_bytes_size, consumer_queue, consumer_batch_timeout, jetstream ] are supported and can be used")
-var allowedParameters = []string{"subject", "stream_name", "stream_description", "stream_subjects",
-	"consumer_max_count", "consumer_max_batch_size", "consumer_max_batch_bytes_size", "consumer_queue",
-	"jetstream", "consumer_batch_timeout"}
+var errNotSupportedParameter = errors.New(
+	fmt.Sprintf("natspubsub: invalid parameter used, "+
+		"only the parameters [ %s ] are supported and can be used",
+		strings.Join(allowedParameters, ", ")))
 
 func init() {
 	o := new(defaultDialer)
@@ -83,14 +85,9 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 
 	connectionUrl := strings.Replace(serverUrl.String(), serverUrl.RequestURI(), "", 1)
 
-	storedOpener, ok := o.openerMap.Load(connectionUrl)
-	if ok {
-		return storedOpener.(*URLOpener), nil
-	}
-
 	for param, values := range serverUrl.Query() {
 		paramName := strings.ToLower(param)
-		if slices.Contains(allowedParameters, paramName) {
+		if !slices.Contains(allowedParameters, paramName) {
 			return nil, errNotSupportedParameter
 		}
 
@@ -100,13 +97,20 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 
 	}
 
+	storedOpener, ok := o.openerMap.Load(connectionUrl)
+	if ok {
+		return storedOpener.(*URLOpener), nil
+	}
+
 	conn, err := o.createConnection(connectionUrl, serverUrl.Query().Has("jetstream"))
 	if err != nil {
 		return nil, err
 	}
 
 	opener := &URLOpener{
-		Connection: conn,
+		Connection:          conn,
+		TopicOptions:        connections.TopicOptions{},
+		SubscriptionOptions: connections.SubscriptionOptions{},
 	}
 
 	o.openerMap.Store(connectionUrl, opener)
@@ -247,49 +251,60 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 //			- stream_subjects,
 //			- consumer_max_count,
 //			- consumer_queue
+//			-
+//			- consumer_max_waiting
+//			-
+//			-
 func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 
 	var err error
+
 	opts := o.SubscriptionOptions
-	setupOpts := opts.SetupOpts
 
 	subject := u.Query().Get("subject")
-	subjects := strings.Split(subject, ",")
-
-	for _, subj := range subjects {
-		subj = path.Join(subj, u.Path)
-	}
-
-	if len(subjects) == 0 || "" == subjects[0] {
+	subject = path.Join(subject, u.Path)
+	if "" == subject {
 		return nil, errNotSubjectInitialized
 	}
 
-	setupOpts.Subjects = subjects
-	setupOpts.DurableQueue = u.Query().Get("consumer_queue")
+	opts.Subjects = []string{subject}
+	opts.DurableQueue = u.Query().Get("consumer_queue")
 
 	opts.ConsumersMaxCount, err = strconv.Atoi(u.Query().Get("consumer_max_count"))
 	if err != nil {
-		opts.ConsumersMaxCount = 1
+		opts.ConsumersMaxCount = 10
 	}
-	opts.ConsumerMaxBatchSize, err = strconv.Atoi(u.Query().Get("consumer_max_batch_size"))
+	opts.ConsumerRequestBatch, err = strconv.Atoi(u.Query().Get("consumer_request_batch"))
 	if err != nil {
-		opts.ConsumerMaxBatchSize = 100
+		opts.ConsumerRequestBatch = 50
 	}
-	opts.ConsumerMaxBatchBytesSize, err = strconv.Atoi(u.Query().Get("consumer_max_batch_bytes_size"))
+	opts.ConsumerRequestMaxBatchBytes, err = strconv.Atoi(u.Query().Get("consumer_request_max_batch_bytes"))
 	if err != nil {
-		opts.ConsumerMaxBatchBytesSize = 0
+		opts.ConsumerRequestMaxBatchBytes = 0
 	}
 
-	opts.ConsumerMaxBatchTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_batch_timeout"))
+	opts.ConsumerRequestTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_request_timeout_ms"))
 	if err != nil {
-		opts.ConsumerMaxBatchTimeoutMs = 10000
+		opts.ConsumerRequestTimeoutMs = 1000
 	}
 
-	setupOpts.StreamName = u.Query().Get("stream_name")
-	setupOpts.StreamDescription = u.Query().Get("stream_description")
-	setupOpts.Subjects = strings.Split(u.Query().Get("stream_subjects"), ",")
+	opts.ConsumerMaxWaiting, err = strconv.Atoi(u.Query().Get("consumer_max_waiting"))
+	if err != nil {
+		opts.ConsumerMaxWaiting = 100
+	}
 
-	opts.SetupOpts = setupOpts
+	opts.ConsumerAckWaitTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_ack_wait_timeout_ms"))
+	if err != nil {
+		opts.ConsumerAckWaitTimeoutMs = 300000
+	}
+	opts.ConsumerMaxAckPending, err = strconv.Atoi(u.Query().Get("consumer_max_ack_pending"))
+	if err != nil {
+		opts.ConsumerMaxAckPending = 1000
+	}
+
+	opts.StreamName = u.Query().Get("stream_name")
+	opts.StreamDescription = u.Query().Get("stream_description")
+	opts.Subjects = append(opts.Subjects, strings.Split(u.Query().Get("stream_subjects"), ",")...)
 
 	return OpenSubscription(ctx, o.Connection, &opts)
 
@@ -439,14 +454,17 @@ func OpenSubscription(ctx context.Context, conn connections.Connection, opts *co
 		maxConsumerCount = 1
 	}
 
-	maxBatchSize := opts.ConsumerMaxBatchSize
+	maxBatchSize := opts.ConsumerRequestBatch
 	if maxBatchSize <= 0 {
 		maxBatchSize = 1
 	}
 
+	maxBatchBytesSize := opts.ConsumerRequestMaxBatchBytes
+
 	var recvBatcherOpts = &batcher.Options{
-		MaxBatchSize: maxBatchSize,
-		MaxHandlers:  maxConsumerCount, // max concurrency for receives
+		MaxHandlers:      maxConsumerCount, // max concurrency for receives
+		MaxBatchSize:     maxBatchSize,
+		MaxBatchByteSize: maxBatchBytesSize,
 	}
 
 	return pubsub.NewSubscription(ds, recvBatcherOpts, nil), nil

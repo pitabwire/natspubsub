@@ -39,7 +39,7 @@ func ExampleOpenSubscription() {
 	conn := connections.NewPlain(natsConn)
 
 	subscription, err := natspubsub.OpenSubscription(
-		ctx, conn, &connections.SubscriptionOptions{SetupOpts: &connections.SetupOptions{Subjects: []string{"example.mysubject"}}})
+		ctx, conn, &connections.SubscriptionOptions{Subjects: []string{"example.mysubject"}})
 	if err != nil {
 		log.Fatal(err)
 	}
