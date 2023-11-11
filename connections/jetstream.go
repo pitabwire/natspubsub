@@ -42,6 +42,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		streamConfig := jetstream.StreamConfig{
 			Name:         opts.StreamName,
 			Description:  opts.StreamDescription,
+			Retention:    jetstream.InterestPolicy,
 			Subjects:     opts.Subjects,
 			MaxConsumers: opts.ConsumersMaxCount,
 		}
@@ -62,7 +63,10 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		AckWait:            time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
 		MaxWaiting:         opts.ConsumerMaxWaiting,
 		MaxAckPending:      opts.ConsumerMaxAckPending,
-		MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+		// MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+	    // this should be greater than or equal to DefaultExpires (30s) being used in fetch else it will give "Exceeded MaxRequestExpires" error
+        // see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
+        MaxRequestExpires:  time.Duration(30000) * time.Millisecond,
 		MaxRequestBatch:    opts.ConsumerRequestBatch,
 		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
 	})
@@ -72,6 +76,14 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	return &jetstreamConsumer{consumer: consumer}, nil
 
+}
+
+func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
+	err := c.jetStream.DeleteConsumer(ctx, opts.StreamName, opts.ConsumerName)
+	if err != nil {
+			return err
+	}
+	return nil
 }
 
 type jetstreamTopic struct {
@@ -129,6 +141,10 @@ func (jc *jetstreamConsumer) ReceiveMessages(_ context.Context, batchCount int) 
 		messages = append(messages, driverMsg)
 	}
 
+	// Because fetch is non-blocking, we need to wait for the operation to complete using msgBatch.Messages() before checking the error.
+	if msgBatch.Error() != nil {
+		return nil, msgBatch.Error()
+	}
 	return messages, nil
 }
 

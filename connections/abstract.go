@@ -62,4 +62,5 @@ type Connection interface {
 	Raw() interface{}
 	CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error)
 	CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error)
+	DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error
 }

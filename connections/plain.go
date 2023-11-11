@@ -57,6 +57,9 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 }
 
+func (c *plainConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
+	return nil
+}
 type plainNatsTopic struct {
 	subject   string
 	plainConn *nats.Conn

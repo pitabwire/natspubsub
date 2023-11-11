@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
+	"github.com/google/uuid"
 	"gocloud.dev/pubsub/batcher"
 	"strings"
 	"testing"
@@ -99,13 +100,14 @@ func (h *harness) MakeNonexistentTopic(ctx context.Context) (driver.Topic, error
 func defaultSubOptions(subject, testName string) *connections.SubscriptionOptions {
 
 	streamName := strings.Replace(testName, "/", "_", -1)
-
+	// If the consumers are durable, ensure that each subscription has a unique consumer name.
+	uniqueConsumerName := streamName + "-" + uuid.New().String()
 	opts := &connections.SubscriptionOptions{
 		StreamName:   streamName,
 		Subjects:     []string{subject},
-		DurableQueue: streamName,
+		DurableQueue: uniqueConsumerName,
 
-		ConsumerName:             streamName,
+		ConsumerName:             uniqueConsumerName,
 		ConsumerRequestTimeoutMs: 1000,
 	}
 	return opts
@@ -122,13 +124,7 @@ func (h *harness) CreateSubscription(ctx context.Context, dt driver.Topic, testN
 		return nil, nil, err
 	}
 	cleanup := func() {
-		var queue connections.Queue
-		if ds.As(&queue) {
-			err0 := queue.Unsubscribe()
-			if err0 != nil {
-				return
-			}
-		}
+		h.conn.DeleteSubscription(ctx, opts)
 	}
 	return ds, cleanup, nil
 }
