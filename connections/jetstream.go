@@ -63,7 +63,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		MaxAckPending: opts.ConsumerMaxAckPending,
 		// this should be greater than or equal to DefaultExpires (30s) being used in fetch else it will give "Exceeded MaxRequestExpires" error
 		// see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
-		MaxRequestExpires:  time.Duration(30000) * time.Millisecond,
+		MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
 		MaxRequestBatch:    opts.ConsumerRequestBatch,
 		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
 	}

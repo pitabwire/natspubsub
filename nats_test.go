@@ -108,7 +108,7 @@ func defaultSubOptions(subject, testName string) *connections.SubscriptionOption
 		Durable:    uniqueConsumerName,
 
 		ConsumerName:             uniqueConsumerName,
-		ConsumerRequestTimeoutMs: 1000,
+		ConsumerRequestTimeoutMs: 30000,
 	}
 	return opts
 }
