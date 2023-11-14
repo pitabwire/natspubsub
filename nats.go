@@ -268,7 +268,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	}
 
 	opts.Subjects = []string{subject}
-	opts.DurableQueue = u.Query().Get("consumer_queue")
+	opts.Queue = u.Query().Get("consumer_queue")
 
 	opts.ConsumersMaxCount, err = strconv.Atoi(u.Query().Get("consumer_max_count"))
 	if err != nil {
@@ -499,7 +499,7 @@ func (s *subscription) SendAcks(ctx context.Context, ids []driver.AckID) error {
 }
 
 // CanNack implements driver.CanNack.
-func (s *subscription) CanNack() bool { return s != nil && s.queue != nil && s.queue.IsDurable() }
+func (s *subscription) CanNack() bool { return s != nil && s.queue != nil && s.queue.IsQueueGroup() }
 
 // SendNacks implements driver.Subscription.SendNacks
 func (s *subscription) SendNacks(ctx context.Context, ids []driver.AckID) error {

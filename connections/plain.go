@@ -34,14 +34,14 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
 	opts.ConsumerRequestBatch = 1
 
-	if opts.DurableQueue != "" {
+	if opts.Queue != "" {
 
-		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subjects[0], opts.DurableQueue)
+		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subjects[0], opts.Queue)
 		if err != nil {
 			return nil, err
 		}
 
-		return &natsConsumer{consumer: subsc, durable: true,
+		return &natsConsumer{consumer: subsc, isQueueGroup: true,
 			batchFetchTimeout: time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond}, nil
 	}
 
@@ -52,9 +52,13 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 		return nil, err
 	}
 
-	return &natsConsumer{consumer: subsc, durable: false,
+	return &natsConsumer{consumer: subsc, isQueueGroup: false,
 		batchFetchTimeout: time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond}, nil
 
+}
+
+func (c *plainConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
+	return nil
 }
 
 type plainNatsTopic struct {
@@ -76,12 +80,12 @@ func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (strin
 
 type natsConsumer struct {
 	consumer          *nats.Subscription
-	durable           bool
+	isQueueGroup      bool
 	batchFetchTimeout time.Duration
 }
 
-func (q *natsConsumer) IsDurable() bool {
-	return q.durable
+func (q *natsConsumer) IsQueueGroup() bool {
+	return false
 }
 
 func (q *natsConsumer) Unsubscribe() error {

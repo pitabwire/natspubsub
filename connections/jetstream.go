@@ -42,6 +42,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		streamConfig := jetstream.StreamConfig{
 			Name:         opts.StreamName,
 			Description:  opts.StreamDescription,
+			Retention:    jetstream.InterestPolicy,
 			Subjects:     opts.Subjects,
 			MaxConsumers: opts.ConsumersMaxCount,
 		}
@@ -53,25 +54,38 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	}
 
-	// Create durable consumer
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+	consumerConfig := jetstream.ConsumerConfig{
 		Name:      opts.ConsumerName,
-		Durable:   opts.DurableQueue,
 		AckPolicy: jetstream.AckExplicitPolicy,
 
-		AckWait:            time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
-		MaxWaiting:         opts.ConsumerMaxWaiting,
-		MaxAckPending:      opts.ConsumerMaxAckPending,
-		MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+		AckWait:       time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
+		MaxWaiting:    opts.ConsumerMaxWaiting,
+		MaxAckPending: opts.ConsumerMaxAckPending,
+		// this should be greater than or equal to DefaultExpires (30s) being used in fetch else it will give "Exceeded MaxRequestExpires" error
+		// see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
+		MaxRequestExpires:  time.Duration(30000) * time.Millisecond,
 		MaxRequestBatch:    opts.ConsumerRequestBatch,
 		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
-	})
+	}
+	if opts.Durable != "" {
+		consumerConfig.Durable = opts.Durable
+	}
+	// Create durable consumer
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerConfig)
 	if err != nil {
 		return nil, err
 	}
 
 	return &jetstreamConsumer{consumer: consumer}, nil
 
+}
+
+func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
+	err := c.jetStream.DeleteConsumer(ctx, opts.StreamName, opts.ConsumerName)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 type jetstreamTopic struct {
@@ -97,7 +111,7 @@ type jetstreamConsumer struct {
 	consumer jetstream.Consumer
 }
 
-func (jc *jetstreamConsumer) IsDurable() bool {
+func (jc *jetstreamConsumer) IsQueueGroup() bool {
 	return true
 }
 
@@ -129,6 +143,10 @@ func (jc *jetstreamConsumer) ReceiveMessages(_ context.Context, batchCount int) 
 		messages = append(messages, driverMsg)
 	}
 
+	// Because fetch is non-blocking, we need to wait for the operation to complete using msgBatch.Messages() before checking the error.
+	if msgBatch.Error() != nil {
+		return nil, msgBatch.Error()
+	}
 	return messages, nil
 }
 
