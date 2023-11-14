@@ -54,22 +54,24 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	}
 
-	// Create durable consumer
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
+	consumerConfig := jetstream.ConsumerConfig{
 		Name:      opts.ConsumerName,
-		Durable:   opts.DurableQueue,
 		AckPolicy: jetstream.AckExplicitPolicy,
 
-		AckWait:            time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
-		MaxWaiting:         opts.ConsumerMaxWaiting,
-		MaxAckPending:      opts.ConsumerMaxAckPending,
-		// MaxRequestExpires:  time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
-	    // this should be greater than or equal to DefaultExpires (30s) being used in fetch else it will give "Exceeded MaxRequestExpires" error
-        // see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
-        MaxRequestExpires:  time.Duration(30000) * time.Millisecond,
+		AckWait:       time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
+		MaxWaiting:    opts.ConsumerMaxWaiting,
+		MaxAckPending: opts.ConsumerMaxAckPending,
+		// this should be greater than or equal to DefaultExpires (30s) being used in fetch else it will give "Exceeded MaxRequestExpires" error
+		// see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
+		MaxRequestExpires:  time.Duration(30000) * time.Millisecond,
 		MaxRequestBatch:    opts.ConsumerRequestBatch,
 		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
-	})
+	}
+	if opts.Durable != "" {
+		consumerConfig.Durable = opts.Durable
+	}
+	// Create durable consumer
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +83,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
 	err := c.jetStream.DeleteConsumer(ctx, opts.StreamName, opts.ConsumerName)
 	if err != nil {
-			return err
+		return err
 	}
 	return nil
 }
@@ -109,7 +111,7 @@ type jetstreamConsumer struct {
 	consumer jetstream.Consumer
 }
 
-func (jc *jetstreamConsumer) IsDurable() bool {
+func (jc *jetstreamConsumer) IsQueueGroup() bool {
 	return true
 }
 

@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
-	"github.com/google/uuid"
 	"gocloud.dev/pubsub/batcher"
 	"strings"
 	"testing"
@@ -103,9 +103,9 @@ func defaultSubOptions(subject, testName string) *connections.SubscriptionOption
 	// If the consumers are durable, ensure that each subscription has a unique consumer name.
 	uniqueConsumerName := streamName + "-" + uuid.New().String()
 	opts := &connections.SubscriptionOptions{
-		StreamName:   streamName,
-		Subjects:     []string{subject},
-		DurableQueue: uniqueConsumerName,
+		StreamName: streamName,
+		Subjects:   []string{subject},
+		Durable:    uniqueConsumerName,
 
 		ConsumerName:             uniqueConsumerName,
 		ConsumerRequestTimeoutMs: 1000,
@@ -621,6 +621,7 @@ func BenchmarkNatsPubSub(b *testing.B) {
 
 	opts := gnatsd.DefaultTestOptions
 	opts.Port = benchPort
+	opts.JetStream = true
 	s := gnatsd.RunServer(&opts)
 	defer s.Shutdown()
 

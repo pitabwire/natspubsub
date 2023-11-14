@@ -19,8 +19,9 @@ type SubscriptionOptions struct {
 	StreamName        string
 	StreamDescription string
 
-	Subjects     []string
-	DurableQueue string
+	Subjects []string
+	Durable  string
+	Queue    string
 
 	ConsumerName string
 
@@ -50,7 +51,7 @@ type Queue interface {
 	Unsubscribe() error
 	Ack(ctx context.Context, ids []driver.AckID) error
 	Nack(ctx context.Context, ids []driver.AckID) error
-	IsDurable() bool
+	IsQueueGroup() bool
 }
 
 type Topic interface {
