@@ -21,7 +21,6 @@ type SubscriptionOptions struct {
 
 	Subjects []string
 	Durable  string
-	Queue    string
 
 	ConsumerName string
 
@@ -31,9 +30,10 @@ type SubscriptionOptions struct {
 	ConsumerRequestTimeoutMs     int
 	ConsumerAckWaitTimeoutMs     int
 
-	//The maximum number of fetch requests that are all waiting in parrallel to receive messages.
+	//The maximum number of fetch requests that are all waiting in parallel to receive messages.
 	//This prevents building up too many requests that the server will have to distribute to for a given consumer.
-	ConsumerMaxWaiting int
+	ConsumerMaxWaiting          int
+	ConsumerMaxRequestExpiresMs int
 
 	ConsumerMaxAckPending int
 }

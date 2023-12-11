@@ -34,9 +34,9 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
 	opts.ConsumerRequestBatch = 1
 
-	if opts.Queue != "" {
+	if opts.Durable != "" {
 
-		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subjects[0], opts.Queue)
+		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subjects[0], opts.Durable)
 		if err != nil {
 			return nil, err
 		}
@@ -92,7 +92,7 @@ func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()
 }
 
-func (q *natsConsumer) ReceiveMessages(ctx context.Context, _ int) ([]*driver.Message, error) {
+func (q *natsConsumer) ReceiveMessages(_ context.Context, _ int) ([]*driver.Message, error) {
 
 	var messages []*driver.Message
 
@@ -117,7 +117,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, _ int) ([]*driver.Me
 
 }
 
-func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
+func (q *natsConsumer) Ack(_ context.Context, ids []driver.AckID) error {
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {
@@ -129,7 +129,7 @@ func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 	return nil
 }
 
-func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
+func (q *natsConsumer) Nack(_ context.Context, ids []driver.AckID) error {
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {

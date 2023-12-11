@@ -709,7 +709,7 @@ func TestOpenSubscriptionFromURL(t *testing.T) {
 		// Invalid parameter.
 		{"nats://localhost:11222/mytopic?param=value", true},
 		// Queue URL Parameter for QueueSubscription.
-		{"nats://localhost:11222/mytopic?consumer_queue=queue1", false},
+		{"nats://localhost:11222/mytopic?consumer_durable=queue1", false},
 		// Multiple values for Queue URL Parameter for QueueSubscription.
 		{"nats://localhost:11222/mytopic?subject=queue1&subject=queue2", true},
 	}

@@ -48,8 +48,8 @@ import (
 )
 
 var allowedParameters = []string{"subject", "stream_name", "stream_description", "stream_subjects",
-	"consumer_max_count", "consumer_request_batch", "consumer_request_max_batch_bytes", "consumer_queue",
-	"jetstream", "consumer_request_timeout_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
+	"consumer_max_count", "consumer_request_batch", "consumer_request_max_batch_bytes", "consumer_durable",
+	"jetstream", "consumer_request_timeout_ms", "consumer_max_request_expires_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
 	"consumer_max_ack_pending"}
 
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
@@ -201,7 +201,7 @@ type serverVersion struct {
 // Scheme is the URL scheme natspubsub registers its URLOpeners under on pubsub.DefaultMux.
 const Scheme = "nats"
 
-// URLOpener opens NATS URLs like "nats://mysubject?natsv2=true".
+// URLOpener opens NATS URLs like "nats://mysubject".
 //
 // The URL host+path is used as the subject.
 //
@@ -251,9 +251,7 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 //			- stream_subjects,
 //			- consumer_max_count,
 //			- consumer_queue
-//			-
 //			- consumer_max_waiting
-//			-
 //			-
 func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 
@@ -268,7 +266,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	}
 
 	opts.Subjects = []string{subject}
-	opts.Queue = u.Query().Get("consumer_queue")
+	opts.Durable = u.Query().Get("consumer_durable")
 
 	opts.ConsumersMaxCount, err = strconv.Atoi(u.Query().Get("consumer_max_count"))
 	if err != nil {
@@ -288,6 +286,11 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 		opts.ConsumerRequestTimeoutMs = 1000
 	}
 
+	opts.ConsumerMaxRequestExpiresMs, err = strconv.Atoi(u.Query().Get("consumer_max_request_expires_ms"))
+	if err != nil {
+		opts.ConsumerMaxRequestExpiresMs = 30000
+	}
+
 	opts.ConsumerMaxWaiting, err = strconv.Atoi(u.Query().Get("consumer_max_waiting"))
 	if err != nil {
 		opts.ConsumerMaxWaiting = 100
@@ -299,7 +302,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	}
 	opts.ConsumerMaxAckPending, err = strconv.Atoi(u.Query().Get("consumer_max_ack_pending"))
 	if err != nil {
-		opts.ConsumerMaxAckPending = 1000
+		opts.ConsumerMaxAckPending = 100
 	}
 
 	opts.StreamName = u.Query().Get("stream_name")
