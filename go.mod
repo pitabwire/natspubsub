@@ -17,7 +17,7 @@ module github.com/pitabwire/natspubsub
 go 1.21
 
 require (
-	github.com/google/uuid v1.4.0
+	github.com/google/uuid v1.5.0
 	github.com/nats-io/nats-server/v2 v2.10.7
 	github.com/nats-io/nats.go v1.31.0
 	gocloud.dev v0.35.0
