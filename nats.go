@@ -225,6 +225,8 @@ type URLOpener struct {
 //		- nats://host:8934?no_subject=foo --> [this yields an error]
 func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic, error) {
 
+	opts := &o.TopicOptions
+
 	subject := u.Query().Get("subject")
 
 	subject = path.Join(subject, u.Path)
@@ -232,7 +234,9 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 		return nil, errNotSubjectInitialized
 	}
 
-	return OpenTopic(ctx, o.Connection, &o.TopicOptions)
+	opts.Subject = subject
+
+	return OpenTopic(ctx, o.Connection, opts)
 
 }
 
@@ -257,7 +261,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	var err error
 
-	opts := o.SubscriptionOptions
+	opts := &o.SubscriptionOptions
 
 	subject := u.Query().Get("subject")
 	subject = path.Join(subject, u.Path)
@@ -309,7 +313,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	opts.StreamDescription = u.Query().Get("stream_description")
 	opts.Subjects = append(opts.Subjects, strings.Split(u.Query().Get("stream_subjects"), ",")...)
 
-	return OpenSubscription(ctx, o.Connection, &opts)
+	return OpenSubscription(ctx, o.Connection, opts)
 
 }
 
