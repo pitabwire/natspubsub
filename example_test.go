@@ -43,7 +43,9 @@ func ExampleOpenSubscription() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer subscription.Shutdown(ctx)
+	defer func(subscription *pubsub.Subscription, ctx context.Context) {
+		_ = subscription.Shutdown(ctx)
+	}(subscription, ctx)
 }
 
 func ExampleOpenTopic() {
@@ -69,7 +71,9 @@ func ExampleOpenTopic() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer topic.Shutdown(ctx)
+	defer func(topic *pubsub.Topic, ctx context.Context) {
+		_ = topic.Shutdown(ctx)
+	}(topic, ctx)
 }
 
 func Example_openTopicFromURL() {
@@ -87,7 +91,9 @@ func Example_openTopicFromURL() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer topic.Shutdown(ctx)
+	defer func(topic *pubsub.Topic, ctx context.Context) {
+		_ = topic.Shutdown(ctx)
+	}(topic, ctx)
 }
 
 func Example_openSubscriptionFromURL() {
@@ -105,5 +111,7 @@ func Example_openSubscriptionFromURL() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer subscription.Shutdown(ctx)
+	defer func(subscription *pubsub.Subscription, ctx context.Context) {
+		_ = subscription.Shutdown(ctx)
+	}(subscription, ctx)
 }

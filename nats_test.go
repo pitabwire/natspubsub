@@ -124,7 +124,7 @@ func (h *harness) CreateSubscription(ctx context.Context, dt driver.Topic, testN
 		return nil, nil, err
 	}
 	cleanup := func() {
-		h.conn.DeleteSubscription(ctx, opts)
+		_ = h.conn.DeleteSubscription(ctx, opts)
 	}
 	return ds, cleanup, nil
 }
@@ -323,7 +323,9 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pt.Shutdown(ctx)
+	defer func(pt *pubsub.Topic, ctx context.Context) {
+		_ = pt.Shutdown(ctx)
+	}(pt, ctx)
 
 	natsConn := conn.Raw().(*nats.Conn)
 
@@ -352,7 +354,9 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ps.Shutdown(ctx)
+	defer func(ps *pubsub.Subscription, ctx context.Context) {
+		_ = ps.Shutdown(ctx)
+	}(ps, ctx)
 	if err = natsConn.Publish(topic, body); err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +389,9 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pt.Shutdown(ctx)
+	defer func(pt *pubsub.Topic, ctx context.Context) {
+		_ = pt.Shutdown(ctx)
+	}(pt, ctx)
 
 	js := conn.Raw().(jetstream.JetStream)
 
@@ -441,7 +447,9 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ps.Shutdown(ctx)
+	defer func(ps *pubsub.Subscription, ctx context.Context) {
+		_ = ps.Shutdown(ctx)
+	}(ps, ctx)
 
 	if _, err = js.Publish(ctx, topic2, body); err != nil {
 		t.Fatal(err)
@@ -594,10 +602,7 @@ func BenchmarkNatsQueuePubSub(b *testing.B) {
 
 		topic := pubsub.NewTopic(dt, nil)
 		defer func(topic *pubsub.Topic, ctx context.Context) {
-			err3 := topic.Shutdown(ctx)
-			if err3 != nil {
-
-			}
+			_ = topic.Shutdown(ctx)
 		}(topic, ctx)
 
 		queueSub := pubsub.NewSubscription(qs, &batcher.Options{
@@ -605,10 +610,7 @@ func BenchmarkNatsQueuePubSub(b *testing.B) {
 			MaxHandlers:  10, // max concurrency for receives
 		}, nil)
 		defer func(queueSub *pubsub.Subscription, ctx context.Context) {
-			err5 := queueSub.Shutdown(ctx)
-			if err5 != nil {
-
-			}
+			_ = queueSub.Shutdown(ctx)
 		}(queueSub, ctx)
 
 		drivertest.RunBenchmarks(b, topic, queueSub)
@@ -652,12 +654,16 @@ func BenchmarkNatsPubSub(b *testing.B) {
 		defer cleanup()
 
 		topic := pubsub.NewTopic(dt, nil)
-		defer topic.Shutdown(ctx)
+		defer func(topic *pubsub.Topic, ctx context.Context) {
+			_ = topic.Shutdown(ctx)
+		}(topic, ctx)
 		sub := pubsub.NewSubscription(ds, &batcher.Options{
 			MaxBatchSize: 100,
 			MaxHandlers:  10, // max concurrency for receives
 		}, nil)
-		defer sub.Shutdown(ctx)
+		defer func(sub *pubsub.Subscription, ctx context.Context) {
+			_ = sub.Shutdown(ctx)
+		}(sub, ctx)
 
 		drivertest.RunBenchmarks(b, topic, sub)
 	})
@@ -687,7 +693,7 @@ func TestOpenTopicFromURL(t *testing.T) {
 			t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
 		}
 		if topic != nil {
-			topic.Shutdown(ctx)
+			_ = topic.Shutdown(ctx)
 		}
 	}
 }
@@ -720,7 +726,7 @@ func TestOpenSubscriptionFromURL(t *testing.T) {
 			t.Errorf("%s: got error %v, want error %v", test.URL, err, test.WantErr)
 		}
 		if sub != nil {
-			sub.Shutdown(ctx)
+			_ = sub.Shutdown(ctx)
 		}
 	}
 }

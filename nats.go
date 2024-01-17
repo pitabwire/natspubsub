@@ -55,10 +55,9 @@ var allowedParameters = []string{"subject", "stream_name", "stream_description",
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
-var errNotSupportedParameter = errors.New(
-	fmt.Sprintf("natspubsub: invalid parameter used, "+
-		"only the parameters [ %s ] are supported and can be used",
-		strings.Join(allowedParameters, ", ")))
+var errNotSupportedParameter = fmt.Errorf("natspubsub: invalid parameter used, "+
+	"only the parameters [ %s ] are supported and can be used",
+	strings.Join(allowedParameters, ", "))
 
 func init() {
 	o := new(defaultDialer)
