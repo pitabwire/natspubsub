@@ -3,7 +3,6 @@ package connections
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/nats-io/nats.go"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
@@ -98,16 +97,15 @@ func (q *natsConsumer) ReceiveMessages(_ context.Context, _ int) ([]*driver.Mess
 
 	msg, err := q.consumer.NextMsg(q.batchFetchTimeout)
 	if err != nil {
-		fmt.Printf(" error occurred : [%s] ", err)
 		if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 			return messages, nil
 		}
+
 		return nil, err
 	}
 	driverMsg, err := decodeMessage(msg)
 
 	if err != nil {
-		fmt.Printf(" error decoding : [%s] ", err)
 		return nil, err
 	}
 
