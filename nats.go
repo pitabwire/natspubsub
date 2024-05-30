@@ -34,7 +34,6 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
 	"net/url"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -213,6 +212,22 @@ type URLOpener struct {
 	SubscriptionOptions connections.SubscriptionOptions
 }
 
+func cleanSubjectFromUrl(u *url.URL) (string, error) {
+	subject := u.Query().Get("subject")
+
+	if subject == "" {
+		subject = u.Path
+	} else {
+		subject += u.Path
+	}
+
+	if subject == "" {
+		return "", errNotSubjectInitialized
+	}
+
+	return subject, nil
+}
+
 // OpenTopicURL opens a pubsub.Topic based on a url supplied.
 //
 //	A topic can be specified in the subject and suffixed by the url path
@@ -226,14 +241,11 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 
 	opts := &o.TopicOptions
 
-	subject := u.Query().Get("subject")
-
-	subject = path.Join(subject, u.Path)
-	if "" == subject {
-		return nil, errNotSubjectInitialized
+	var err error
+	opts.Subject, err = cleanSubjectFromUrl(u)
+	if err != nil {
+		return nil, err
 	}
-
-	opts.Subject = subject
 
 	return OpenTopic(ctx, o.Connection, opts)
 
@@ -243,10 +255,10 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 //
 //	 A subscription also creates the required underlaying queue or streams
 //	 There are many more parameters checked in this case compared to the publish topic section.
-//	 If required the list of parameters can be extended but for now only a subset is defined and
-//	 the remaining ones utilize the sensible defaults that nats comes with.
+//	 If required, the list of parameters can be extended, but for now only a subset is defined and
+//	 the remaining ones utilize the sensible defaults that nats come with.
 //
-//		The list of parameters include :
+//		The list of parameters includes:
 //
 //			- subject,
 //			- stream_name,
@@ -255,17 +267,14 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 //			- consumer_max_count,
 //			- consumer_queue
 //			- consumer_max_waiting
-//			-
-func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 
-	var err error
+func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 
 	opts := &o.SubscriptionOptions
 
-	subject := u.Query().Get("subject")
-	subject = path.Join(subject, u.Path)
-	if "" == subject {
-		return nil, errNotSubjectInitialized
+	subject, err := cleanSubjectFromUrl(u)
+	if err != nil {
+		return nil, err
 	}
 
 	opts.Subjects = []string{subject}
@@ -310,7 +319,10 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	opts.StreamName = u.Query().Get("stream_name")
 	opts.StreamDescription = u.Query().Get("stream_description")
-	opts.Subjects = append(opts.Subjects, strings.Split(u.Query().Get("stream_subjects"), ",")...)
+	streamSubject := u.Query().Get("stream_subject")
+	if streamSubject != "" {
+		opts.Subjects = append(opts.Subjects, strings.Split(streamSubject, ",")...)
+	}
 
 	return OpenSubscription(ctx, o.Connection, opts)
 

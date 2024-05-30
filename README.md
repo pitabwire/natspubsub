@@ -9,6 +9,80 @@ Use OpenTopic to construct a *pubsub.Topic, and/or OpenSubscription to construct
 *pubsub.Subscription. This package uses gob to encode and decode driver.Message to
 []byte.
 
+# Usage (publishing a message)
+
+```go
+
+    // opening a topic looks like this
+	package main 
+    import (
+        "context"
+    
+        "gocloud.dev/pubsub"
+        _ "github.com/pitabwire/natspubsub"
+    )
+	...
+	ctx := context.Background()
+    // pubsub.OpenTopic creates a *pubsub.Topic from a URL.
+    // This URL will Dial the NATS server at the URL in the environment variable
+    // NATS_SERVER_URL and send messages with subject "example.mysubject".
+    topic, err := pubsub.OpenTopic(ctx, "nats://localhost:4222/example.mysubject?jetstream=true")
+    if err != nil {
+        return err
+    }
+	defer topic.Shutdown(ctx)
+	
+    err := topic.Send(ctx, &pubsub.Message{
+        Body: []byte("Hello, World!\n"),
+        Metadata: map[string]string{
+            "language":   "en",
+            "importance": "high",
+        },
+    })
+    if err != nil {
+    return err
+    }
+    
+    
+```
+
+# (receiving messages)
+
+```go
+package main
+import (
+    "context"
+
+    "gocloud.dev/pubsub"
+    _ "github.com/pitabwire/natspubsub"
+)
+...
+ctx := context.Background()
+subs, err := pubsub.OpenSubscription(ctx, "nats://localhost:4222/example.mysubject?jetstream=true")
+if err != nil {
+    return fmt.Errorf("could not open topic subscription: %v", err)
+}
+
+// Loop on received messages.
+for {
+    msg, err := subscription.Receive(ctx)
+    if err != nil {
+        // Errors from Receive indicate that Receive will no longer succeed.
+        log.Printf("Receiving message: %v", err)
+        break
+    }
+    // Do work based on the message, for example:
+    fmt.Printf("Got message: %q\n", msg.Body)
+    // Messages must always be acknowledged with Ack.
+    msg.Ack()
+}
+
+defer subs.Shutdown(ctx)
+
+
+```
+
+
 # URLs
 
 For pubsub.OpenTopic and pubsub.OpenSubscription, natspubsub registers
