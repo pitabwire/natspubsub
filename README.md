@@ -26,7 +26,7 @@ Use OpenTopic to construct a *pubsub.Topic, and/or OpenSubscription to construct
     // pubsub.OpenTopic creates a *pubsub.Topic from a URL.
     // This URL will Dial the NATS server at the URL in the environment variable
     // NATS_SERVER_URL and send messages with subject "example.mysubject".
-    topic, err := pubsub.OpenTopic(ctx, "nats://localhost:4222/example.mysubject?jetstream=true")
+    topic, err := pubsub.OpenTopic(ctx, "nats://localhost:4222?jetstream=true&stream_name=example&subject=example.mysubject")
     if err != nil {
         return err
     }
@@ -58,14 +58,14 @@ import (
 )
 ...
 ctx := context.Background()
-subs, err := pubsub.OpenSubscription(ctx, "nats://localhost:4222/example.mysubject?jetstream=true")
+subs, err := pubsub.OpenSubscription(ctx, "nats://localhost:4222?jetstream=true&stream_name=example&subject=example.mysubject")
 if err != nil {
     return fmt.Errorf("could not open topic subscription: %v", err)
 }
 
 // Loop on received messages.
 for {
-    msg, err := subscription.Receive(ctx)
+    msg, err := subs.Receive(ctx)
     if err != nil {
         // Errors from Receive indicate that Receive will no longer succeed.
         log.Printf("Receiving message: %v", err)

@@ -22,6 +22,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/pubsub/batcher"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -566,6 +567,98 @@ func TestErrorCode(t *testing.T) {
 	}
 	if gce := qs.ErrorCode(nats.ErrTimeout); gce != gcerrors.DeadlineExceeded {
 		t.Fatalf("Expected %v, got %v", gcerrors.DeadlineExceeded, gce)
+	}
+}
+
+func isValidSubject(subject string) bool {
+	for _, char := range subject {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') ||
+			char == '.' || char == '*' || char == '>' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func TestCleanSubjectFromUrl(t *testing.T) {
+	tests := []struct {
+		name        string
+		inputURL    string
+		expected    string
+		expectError bool
+	}{
+		{
+			name:        "Subject query present",
+			inputURL:    "http://example.com/path?subject=testSubject",
+			expected:    "testSubject.path",
+			expectError: false,
+		},
+		{
+			name:        "No subject query, path present",
+			inputURL:    "http://example.com/testPath",
+			expected:    "testPath",
+			expectError: false,
+		},
+		{
+			name:        "Both subject query and path present",
+			inputURL:    "http://example.com/testPath?subject=testSubject",
+			expected:    "testSubject.testPath",
+			expectError: false,
+		},
+		{
+			name:        "Empty subject query and path",
+			inputURL:    "http://example.com/",
+			expected:    "",
+			expectError: true,
+		},
+		{
+			name:        "Subject query present, empty path",
+			inputURL:    "http://example.com/?subject=testSubject",
+			expected:    "testSubject",
+			expectError: false,
+		},
+		{
+			name:        "No subject query, empty path",
+			inputURL:    "http://example.com/",
+			expected:    "",
+			expectError: true,
+		},
+		{
+			name:        "Subject with allowed special characters",
+			inputURL:    "http://example.com/testPath?subject=test.Subject.*.>",
+			expected:    "test.Subject.*.>.testPath",
+			expectError: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			u, err := url.Parse(test.inputURL)
+			if err != nil {
+				t.Fatalf("Failed to parse URL: %v", err)
+			}
+
+			result, err := cleanSubjectFromUrl(u)
+			if test.expectError {
+				if err == nil {
+					t.Errorf("Expected error but got none")
+				}
+				return
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+
+			if result != test.expected {
+				t.Errorf("Expected %v, got %v", test.expected, result)
+			}
+
+			if !isValidSubject(result) {
+				t.Errorf("Subject contains invalid characters: %v", result)
+			}
+		})
 	}
 }
 

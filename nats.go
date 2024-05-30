@@ -215,10 +215,15 @@ type URLOpener struct {
 func cleanSubjectFromUrl(u *url.URL) (string, error) {
 	subject := u.Query().Get("subject")
 
-	if subject == "" {
-		subject = u.Path
-	} else {
-		subject += u.Path
+	// Clean the leading slash from the path
+	pathPart := strings.TrimPrefix(u.Path, "/")
+
+	if pathPart != "" {
+		if subject == "" {
+			subject = pathPart
+		} else {
+			subject += "." + pathPart
+		}
 	}
 
 	if subject == "" {
