@@ -16,7 +16,7 @@ module github.com/pitabwire/natspubsub
 
 go 1.21.0
 
-toolchain go1.23.4
+toolchain go1.23.6
 
 require (
 	github.com/google/uuid v1.6.0
