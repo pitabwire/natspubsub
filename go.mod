@@ -14,9 +14,7 @@
 
 module github.com/pitabwire/natspubsub
 
-go 1.22.0
-
-toolchain go1.23.6
+go 1.23.0
 
 require (
 	github.com/google/uuid v1.6.0
@@ -27,7 +25,6 @@ require (
 
 require (
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/googleapis/gax-go/v2 v2.13.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
