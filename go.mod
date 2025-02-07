@@ -14,14 +14,14 @@
 
 module github.com/pitabwire/natspubsub
 
-go 1.22
+go 1.22.0
 
 toolchain go1.23.6
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.10.25
-	github.com/nats-io/nats.go v1.36.0
+	github.com/nats-io/nats.go v1.39.0
 	gocloud.dev v0.40.0
 )
 
