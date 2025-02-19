@@ -19,7 +19,7 @@ go 1.23.0
 require (
 	github.com/google/uuid v1.6.0
 	github.com/nats-io/nats-server/v2 v2.10.25
-	github.com/nats-io/nats.go v1.39.0
+	github.com/nats-io/nats.go v1.39.1
 	gocloud.dev v0.40.0
 )
 
