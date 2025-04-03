@@ -100,7 +100,7 @@ func (h *harness) MakeNonexistentTopic(ctx context.Context) (driver.Topic, error
 
 func defaultSubOptions(subject, testName string) *connections.SubscriptionOptions {
 
-	streamName := strings.Replace(testName, "/", "_", -1)
+	streamName := strings.ReplaceAll(testName, "/", "_")
 	// If the consumers are durable, ensure that each subscription has a unique consumer name.
 	uniqueConsumerName := streamName + "-" + uuid.New().String()
 	opts := &connections.SubscriptionOptions{
@@ -336,7 +336,7 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 	}
 	m, err := nsub.NextMsgWithContext(ctx)
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf(" could not get next message with context %v", err)
 	}
 
 	if !bytes.Equal(m.Data, body) {
@@ -430,7 +430,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	}
 	m, err := c.Next()
 	if err != nil {
-		t.Fatalf(err.Error())
+		t.Fatalf("could not consume message %v", err.Error())
 	}
 	if !bytes.Equal(m.Data(), body) {
 		t.Fatalf("Data did not match. %q vs %q\n", m.Data(), body)
