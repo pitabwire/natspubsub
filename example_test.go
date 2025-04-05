@@ -36,7 +36,11 @@ func ExampleOpenSubscription() {
 		log.Fatal(err)
 	}
 	defer natsConn.Close()
-	conn := connections.NewPlain(natsConn)
+
+	conn, err := connections.NewPlain(natsConn)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	subscription, err := natspubsub.OpenSubscription(
 		ctx, conn, &connections.SubscriptionOptions{Subjects: []string{"example.mysubject"}})

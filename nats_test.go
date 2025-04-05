@@ -51,7 +51,27 @@ func newPlainHarness(ctx context.Context, t *testing.T) (drivertest.Harness, err
 		return nil, err
 	}
 
-	plainConn := connections.NewPlain(nc)
+	plainConn, err := connections.NewPlain(nc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server version %q: %v", nc.ConnectedServerVersion(), err)
+	}
+
+	return &harness{s: s, conn: plainConn}, nil
+}
+
+func newPlainV1Harness(ctx context.Context, t *testing.T) (drivertest.Harness, error) {
+	opts := gnatsd.DefaultTestOptions
+	opts.Port = testPort
+	s := gnatsd.RunServer(&opts)
+	nc, err := nats.Connect(fmt.Sprintf(testServerUrlFmt, testPort))
+	if err != nil {
+		return nil, err
+	}
+
+	plainConn, err := connections.NewPlainWithEncodingV1(nc, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse server version %q: %v", nc.ConnectedServerVersion(), err)
+	}
 
 	return &harness{s: s, conn: plainConn}, nil
 }
@@ -302,6 +322,11 @@ func TestConformanceJetstream(t *testing.T) {
 func TestConformancePlain(t *testing.T) {
 	asTests := []drivertest.AsTest{plainNatsAsTest{}}
 	drivertest.RunConformanceTests(t, newPlainHarness, asTests)
+}
+
+func TestConformancePlainV1(t *testing.T) {
+	asTests := []drivertest.AsTest{plainNatsAsTest{}}
+	drivertest.RunConformanceTests(t, newPlainV1Harness, asTests)
 }
 
 // These are natspubsub specific to increase coverage.
@@ -676,7 +701,10 @@ func BenchmarkNatsQueuePubSub(b *testing.B) {
 	}
 	defer nc.Close()
 
-	conn := connections.NewPlain(nc)
+	conn, err := connections.NewPlain(nc)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	h := &harness{s: s, conn: conn}
 

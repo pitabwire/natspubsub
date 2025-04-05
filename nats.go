@@ -27,14 +27,15 @@
 package natspubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -46,9 +47,14 @@ import (
 	"gocloud.dev/pubsub/driver"
 )
 
-var allowedParameters = []string{"subject", "stream_name", "stream_description", "stream_subjects",
+const (
+	natsV1QueryParameter    = "nats_v1"
+	jetstreamQueryParameter = "jetstream"
+)
+
+var allowedParameters = []string{natsV1QueryParameter, jetstreamQueryParameter, "subject", "stream_name", "stream_description", "stream_subjects",
 	"consumer_max_count", "consumer_request_batch", "consumer_request_max_batch_bytes", "consumer_durable",
-	"jetstream", "consumer_request_timeout_ms", "consumer_max_request_expires_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
+	"consumer_request_timeout_ms", "consumer_max_request_expires_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
 	"consumer_max_ack_pending"}
 
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
@@ -100,7 +106,10 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 		return storedOpener.(*URLOpener), nil
 	}
 
-	conn, err := o.createConnection(connectionUrl, serverUrl.Query().Has("jetstream"))
+	useV1Encoding := o.featureIsEnabledViaUrl(serverUrl.Query(), natsV1QueryParameter)
+	isJetstreamEnabled := o.featureIsEnabledViaUrl(serverUrl.Query(), jetstreamQueryParameter)
+
+	conn, err := o.createConnection(connectionUrl, isJetstreamEnabled, useV1Encoding)
 	if err != nil {
 		return nil, err
 	}
@@ -116,38 +125,58 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 	return opener, nil
 }
 
-func (o *defaultDialer) createConnection(connectionUrl string, isJetstream bool) (connections.Connection, error) {
+func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnabled bool, useV1Encoding bool) (connections.Connection, error) {
 	natsConn, err := nats.Connect(connectionUrl)
 	if err != nil {
 		return nil, fmt.Errorf("natspubsub: failed to dial server using %q: %v", connectionUrl, err)
 	}
 
-	sv, err := parseServerVersion(natsConn.ConnectedServerVersion())
+	sv, err := connections.ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
 	}
-	// Check if the server version is at least 2.2.0.
-	if sv.major < 2 && sv.minor < 2 {
-		return nil, fmt.Errorf("natspubsub: NATS server version %q is not supported", natsConn.ConnectedServerVersion())
-	}
 
 	var conn connections.Connection
-	if isJetstream {
-
-		js, err := jetstream.New(natsConn)
-		if err != nil {
-			return nil, fmt.Errorf("natspubsub: failed to convert server to jetstream : %v", err)
-		}
-
-		conn = connections.NewJetstream(js)
-
-	} else {
-
-		conn = connections.NewPlain(natsConn)
-
+	if !sv.JetstreamSupported() || !isJetstreamEnabled {
+		return connections.NewPlainWithEncodingV1(natsConn, useV1Encoding)
 	}
 
+	var js jetstream.JetStream
+	js, err = jetstream.New(natsConn)
+	if err != nil {
+		return nil, fmt.Errorf("natspubsub: failed to convert server to jetstream : %v", err)
+	}
+
+	conn = connections.NewJetstream(js)
 	return conn, nil
+
+}
+
+func (o *defaultDialer) featureIsEnabledViaUrl(q url.Values, key string) bool {
+	if len(q) == 0 {
+		return false
+	}
+	v, ok := q[key]
+	if !ok {
+		return false
+	}
+
+	if len(v) == 0 {
+		// If the query parameter was provided without any value i.e. nats://mysubject?natsv2
+		// it assumes the value is true.
+		return true
+	}
+	if len(v) > 1 {
+		return false
+	}
+	if v[0] == "" {
+		return true
+	}
+	useV2, err := strconv.ParseBool(v[0])
+	if err != nil {
+		return false
+	}
+	return useV2
 }
 
 func (o *defaultDialer) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic, error) {
@@ -164,36 +193,6 @@ func (o *defaultDialer) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*p
 		return nil, fmt.Errorf("open subscription %v: failed to open default connection: %v", u, err)
 	}
 	return opener.OpenSubscriptionURL(ctx, u)
-}
-
-var semVerRegexp = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
-
-func parseServerVersion(version string) (serverVersion, error) {
-	m := semVerRegexp.FindStringSubmatch(version)
-	if m == nil {
-		return serverVersion{}, errors.New("failed to parse server version")
-	}
-	var (
-		major, minor, patch int
-		err                 error
-	)
-	major, err = strconv.Atoi(m[1])
-	if err != nil {
-		return serverVersion{}, fmt.Errorf("failed to parse server version major number %q: %v", m[1], err)
-	}
-	minor, err = strconv.Atoi(m[2])
-	if err != nil {
-		return serverVersion{}, fmt.Errorf("failed to parse server version minor number %q: %v", m[2], err)
-	}
-	patch, err = strconv.Atoi(m[3])
-	if err != nil {
-		return serverVersion{}, fmt.Errorf("failed to parse server version patch number %q: %v", m[3], err)
-	}
-	return serverVersion{major: major, minor: minor, patch: patch}, nil
-}
-
-type serverVersion struct {
-	major, minor, patch int
 }
 
 // Scheme is the URL scheme natspubsub registers its URLOpeners under on pubsub.DefaultMux.
@@ -388,7 +387,17 @@ func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
 }
 
 func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
-	msg := encodeMessage(m, t.iTopic.Subject())
+	var msg *nats.Msg
+	var err error
+	if t.iTopic.UseV1Encoding() {
+		msg, err = encodeV1Message(m, t.iTopic.Subject())
+		if err != nil {
+			return err
+		}
+	} else {
+		msg = encodeMessage(m, t.iTopic.Subject())
+	}
+
 	if m.BeforeSend != nil {
 		asFunc := func(i interface{}) bool {
 			if nm, ok := i.(**nats.Msg); ok {
@@ -397,18 +406,20 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 			}
 			return false
 		}
-		if err := m.BeforeSend(asFunc); err != nil {
+		if err = m.BeforeSend(asFunc); err != nil {
 			return err
 		}
 	}
 
-	if _, err := t.iTopic.PublishMessage(ctx, msg); err != nil {
+	_, err = t.iTopic.PublishMessage(ctx, msg)
+	if err != nil {
 		return err
 	}
 
 	if m.AfterSend != nil {
 		asFunc := func(i interface{}) bool { return false }
-		if err := m.AfterSend(asFunc); err != nil {
+		err = m.AfterSend(asFunc)
+		if err != nil {
 			return err
 		}
 	}
@@ -572,6 +583,24 @@ func (*subscription) ErrorCode(err error) gcerrors.ErrorCode {
 
 // Close implements driver.Subscription.Close.
 func (*subscription) Close() error { return nil }
+
+func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	// Always encode metadata, even if empty - this ensures consistent message format
+	if err := enc.Encode(dm.Metadata); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(dm.Body); err != nil {
+		return nil, err
+	}
+	return &nats.Msg{
+		Subject: sub,
+		Data:    buf.Bytes(),
+	}, nil
+
+}
 
 func encodeMessage(dm *driver.Message, sub string) *nats.Msg {
 	var header nats.Header

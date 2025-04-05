@@ -68,7 +68,9 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		MaxRequestBatch:    opts.ConsumerRequestBatch,
 		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
 	}
-	if opts.Durable != "" {
+
+	isDurableQueue := opts.Durable != ""
+	if isDurableQueue {
 		consumerConfig.Durable = opts.Durable
 	}
 	// Create durable consumer
@@ -77,7 +79,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		return nil, err
 	}
 
-	return &jetstreamConsumer{consumer: consumer}, nil
+	return &jetstreamConsumer{consumer: consumer, isQueueGroup: isDurableQueue}, nil
 
 }
 
@@ -94,6 +96,9 @@ type jetstreamTopic struct {
 	jetStream jetstream.JetStream
 }
 
+func (t *jetstreamTopic) UseV1Encoding() bool {
+	return false
+}
 func (t *jetstreamTopic) Subject() string {
 	return t.subject
 }
@@ -109,11 +114,16 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 }
 
 type jetstreamConsumer struct {
-	consumer jetstream.Consumer
+	consumer     jetstream.Consumer
+	isQueueGroup bool
+}
+
+func (jc *jetstreamConsumer) UseV1Decoding() bool {
+	return false
 }
 
 func (jc *jetstreamConsumer) IsQueueGroup() bool {
-	return true
+	return jc.isQueueGroup
 }
 
 func (jc *jetstreamConsumer) Unsubscribe() error {
