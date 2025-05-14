@@ -18,7 +18,7 @@ go 1.24.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/nats-io/nats-server/v2 v2.11.1
+	github.com/nats-io/nats-server/v2 v2.11.3
 	github.com/nats-io/nats.go v1.41.2
 	gocloud.dev v0.41.0
 )
@@ -30,7 +30,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.14.1 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/minio/highwayhash v1.0.3 // indirect
-	github.com/nats-io/jwt/v2 v2.7.3 // indirect
+	github.com/nats-io/jwt/v2 v2.7.4 // indirect
 	github.com/nats-io/nkeys v0.4.11 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	go.opencensus.io v0.24.0 // indirect
