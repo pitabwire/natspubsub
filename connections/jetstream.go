@@ -8,7 +8,6 @@ import (
 	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"strconv"
-	"time"
 )
 
 func NewJetstream(js jetstream.JetStream) Connection {
@@ -31,7 +30,7 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
-	stream, err := c.jetStream.Stream(ctx, opts.StreamName)
+	stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
 	if err != nil &&
 		errors.Is(err, nats.ErrStreamNotFound) {
 		return nil, err
@@ -39,42 +38,17 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	if stream == nil {
 
-		streamConfig := jetstream.StreamConfig{
-			Name:         opts.StreamName,
-			Description:  opts.StreamDescription,
-			Retention:    jetstream.InterestPolicy,
-			Subjects:     opts.Subjects,
-			MaxConsumers: opts.ConsumersMaxCount,
-		}
-
-		stream, err = c.jetStream.CreateStream(ctx, streamConfig)
+		stream, err = c.jetStream.CreateStream(ctx, opts.StreamConfig)
 		if err != nil {
 			return nil, err
 		}
 
 	}
 
-	consumerConfig := jetstream.ConsumerConfig{
-		Name:      opts.ConsumerName,
-		AckPolicy: jetstream.AckExplicitPolicy,
+	isDurableQueue := opts.ConsumerConfig.Durable != ""
 
-		AckWait:       time.Duration(opts.ConsumerAckWaitTimeoutMs) * time.Millisecond,
-		MaxWaiting:    opts.ConsumerMaxWaiting,
-		MaxAckPending: opts.ConsumerMaxAckPending,
-		// this should be greater than or equal to DefaultExpires (30s)
-		// being used in fetch else it will give "Exceeded MaxRequestExpires" error
-		// see https://natsbyexample.com/examples/jetstream/pull-consumer-limits/go
-		MaxRequestExpires:  time.Duration(opts.ConsumerMaxRequestExpiresMs) * time.Millisecond,
-		MaxRequestBatch:    opts.ConsumerRequestBatch,
-		MaxRequestMaxBytes: opts.ConsumerRequestMaxBatchBytes,
-	}
-
-	isDurableQueue := opts.Durable != ""
-	if isDurableQueue {
-		consumerConfig.Durable = opts.Durable
-	}
 	// Create durable consumer
-	consumer, err := stream.CreateOrUpdateConsumer(ctx, consumerConfig)
+	consumer, err := stream.CreateOrUpdateConsumer(ctx, opts.ConsumerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +58,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 }
 
 func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
-	err := c.jetStream.DeleteConsumer(ctx, opts.StreamName, opts.ConsumerName)
+	err := c.jetStream.DeleteConsumer(ctx, opts.StreamConfig.Name, opts.ConsumerConfig.Name)
 	if err != nil {
 		return err
 	}
@@ -109,7 +83,6 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 	if ack, err = t.jetStream.PublishMsg(ctx, msg); err != nil {
 		return "", err
 	}
-
 	return strconv.Itoa(int(ack.Sequence)), nil
 }
 
@@ -169,7 +142,7 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 		}
 
 		// We don;t use DoubleAck as it fails conformance tests
-		_ = msg.DoubleAck(ctx)
+		_ = msg.Ack()
 	}
 
 	return nil

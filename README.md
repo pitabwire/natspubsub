@@ -131,19 +131,11 @@ Comprehensive definitions of the options can be found here :
 |----------------------------------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 | jetstream                        | true          | Enables 
 | subject                          |               | A string of characters that form a name which the publisher and subscriber can use to find each other.                                                                                                                                         
-| stream_name                      |               | Name of a stream, Names cannot contain whitespace, ., *, >, path separators (forward or backwards slash), and non-printable characters.                                                                                                        
-| stream_description               |               | A short explanation of what the stream is about                                                                                                                                                                                                
-| stream_subjects                  | []            | A list of subjects to bind. Wildcards are supported. Cannot be set for [mirror](https://docs.nats.io/nats-concepts/jetstream/streams#mirror) streams.                                                                                          
-| consumer_max_count               | 10            | How many Consumers can be defined for a given Stream, -1 for unlimited                                                                                                                                                                         
-| consumer_durable                 |               | If set, clients can have subscriptions bind to the consumer and resume until the consumer is explicitly deleted. A durable name cannot contain whitespace, ., *, >, path separators (forward or backwards slash), and non-printable characters. 
-| consumer_max_waiting             |               | The maximum number of waiting pull requests.
-| consumer_max_request_expires_ms  | 30000         | The maximum duration a single pull request will wait for messages to be available to pull.
-| consumer_request_batch           | 50            | The maximum batch size a single pull request can make. When set with MaxRequestMaxBytes, the batch size will be constrained by whichever limit is hit first.
-| consumer_request_max_batch_bytes | 0             | The maximum total bytes that can be requested in a given batch. When set with MaxRequestBatch, the batch size will be constrained by whichever limit is hit first.
-| consumer_request_timeout_ms      | 1000          | Duration the consumer waits for messages to buffer when pulling a batch
-| consumer_ack_wait_timeout_ms     | 300000        | The duration that the server will wait for an ack for any individual message once it has been delivered to a consumer. If an ack is not received in time, the message will be redelivered.
-| consumer_max_ack_pending         | 100           | Defines the maximum number of messages, without an acknowledgement, that can be outstanding. Once this limit is reached message delivery will be suspended. This limit applies across all of the consumer's bound subscriptions. A value of -1 means there can be any number of pending acks (i.e. no flow control). This does not apply when the AckNone policy is used.
 
+Stream config options are prefixed by "stream_" while consumer config options are prefixed by "consumer_"
+
+see : https://github.com/nats-io/nats.go/blob/v1.42.0/jetstream/stream_config.go#L58 for config names in the json part
+also : https://github.com/nats-io/nats.go/blob/v1.42.0/jetstream/consumer_config.go#L102 
 
 
 # Publishing options

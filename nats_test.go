@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
@@ -124,12 +125,10 @@ func defaultSubOptions(subject, testName string) *connections.SubscriptionOption
 	// If the consumers are durable, ensure that each subscription has a unique consumer name.
 	uniqueConsumerName := streamName + "-" + uuid.New().String()
 	opts := &connections.SubscriptionOptions{
-		StreamName: streamName,
-		Subjects:   []string{subject},
-		Durable:    uniqueConsumerName,
+		Subject: subject,
 
-		ConsumerName:             uniqueConsumerName,
-		ConsumerRequestTimeoutMs: 30000,
+		StreamConfig:   jetstream.StreamConfig{Name: streamName, Subjects: []string{subject}},
+		ConsumerConfig: jetstream.ConsumerConfig{Name: uniqueConsumerName, Durable: uniqueConsumerName, MaxRequestExpires: 30000 * time.Millisecond},
 	}
 	return opts
 }
@@ -436,6 +435,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 		stream, err = js.CreateStream(ctx, streamConfig)
 		if err != nil {
 			t.Fatal(err)
+			return
 		}
 
 	}
@@ -836,7 +836,7 @@ func TestOpenSubscriptionFromURL(t *testing.T) {
 		// Invalid parameter.
 		{"nats://localhost:11222/mytopic?param=value", true},
 		// Queue URL Parameter for QueueSubscription.
-		{"nats://localhost:11222/mytopic?consumer_durable=queue1", false},
+		{"nats://localhost:11222/mytopic?consumer_durable_name=queue1", false},
 		// Multiple values for Queue URL Parameter for QueueSubscription.
 		{"nats://localhost:11222/mytopic?subject=queue1&subject=queue2", true},
 	}

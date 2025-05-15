@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"gocloud.dev/pubsub/batcher"
 	"gocloud.dev/pubsub/driver"
 	"regexp"
 	"strconv"
@@ -32,26 +34,11 @@ type TopicOptions struct {
 // these will later be subscribed to by the consumers of nats messages.
 // The appropriate *pubsub.Subscription is created as a result here.
 type SubscriptionOptions struct {
-	StreamName        string
-	StreamDescription string
+	Subject string
 
-	Subjects []string
-	Durable  string
-
-	ConsumerName string
-
-	ConsumersMaxCount            int
-	ConsumerRequestBatch         int
-	ConsumerRequestMaxBatchBytes int
-	ConsumerRequestTimeoutMs     int
-	ConsumerAckWaitTimeoutMs     int
-
-	//The maximum number of fetch requests that are all waiting in parallel to receive messages.
-	//This prevents building up too many requests that the server will have to distribute to for a given consumer.
-	ConsumerMaxWaiting          int
-	ConsumerMaxRequestExpiresMs int
-
-	ConsumerMaxAckPending int
+	BatchConfig    batcher.Options
+	StreamConfig   jetstream.StreamConfig
+	ConsumerConfig jetstream.ConsumerConfig
 }
 
 type Queue interface {

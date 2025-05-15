@@ -43,7 +43,7 @@ func ExampleOpenSubscription() {
 	}
 
 	subscription, err := natspubsub.OpenSubscription(
-		ctx, conn, &connections.SubscriptionOptions{Subjects: []string{"example.mysubject"}})
+		ctx, conn, &connections.SubscriptionOptions{Subject: "example.mysubject"})
 	if err != nil {
 		log.Fatal(err)
 	}

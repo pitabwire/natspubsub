@@ -49,33 +49,33 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 	//We force the batch fetch size to 1, as only jetstream enabled connections can do batch fetches
 	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
-	opts.ConsumerRequestBatch = 1
+	opts.ConsumerConfig.MaxRequestBatch = 1
 
 	// Determine if we should use V1 encoding - either we need to because server doesn't support V2
 	// or the client explicitly requested V1 encoding
 	useV1Decoding := !c.version.V2Supported() || c.useV1Encoding
 
-	if opts.Durable != "" {
+	if opts.ConsumerConfig.Durable != "" {
 
-		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subjects[0], opts.Durable)
+		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subject, opts.ConsumerConfig.Durable)
 		if err != nil {
 			return nil, err
 		}
 
 		return &natsConsumer{consumer: subsc, isQueueGroup: true,
-			batchFetchTimeout: time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+			batchFetchTimeout: opts.ConsumerConfig.MaxRequestExpires,
 			useV1Decoding:     useV1Decoding}, nil
 	}
 
 	// Using nats without any form of queue mechanism is fine only where
 	// loosing some messages is ok as this essentially is an atmost once delivery situation here.
-	subsc, err := c.natsConnection.SubscribeSync(opts.Subjects[0])
+	subsc, err := c.natsConnection.SubscribeSync(opts.Subject)
 	if err != nil {
 		return nil, err
 	}
 
 	return &natsConsumer{consumer: subsc, isQueueGroup: false,
-		batchFetchTimeout: time.Duration(opts.ConsumerRequestTimeoutMs) * time.Millisecond,
+		batchFetchTimeout: opts.ConsumerConfig.MaxRequestExpires,
 		useV1Decoding:     useV1Decoding}, nil
 
 }
@@ -103,7 +103,7 @@ func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (strin
 		return "", err
 	}
 	err = t.plainConn.PublishMsg(msg)
-	return "", nil
+	return "", err
 }
 
 type natsConsumer struct {
@@ -211,14 +211,14 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	}
 
 	dm.Metadata = metadata
-	
+
 	// Now decode the body
 	var body []byte
 	if err := dec.Decode(&body); err != nil {
 		return nil, err
 	}
 	dm.Body = body
-	
+
 	return &dm, nil
 }
 

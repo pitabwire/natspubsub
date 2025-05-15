@@ -30,6 +30,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/nats-io/nats.go"
@@ -43,26 +44,41 @@ import (
 
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
-	"gocloud.dev/pubsub/batcher"
 	"gocloud.dev/pubsub/driver"
 )
 
 const (
 	natsV1QueryParameter    = "nats_v1"
 	jetstreamQueryParameter = "jetstream"
+
+	QueryParamSubject = "subject"
+
+	BatchConfigPrefix    = "batch_"
+	ConsumerConfigPrefix = "consumer_"
+	StreamConfigPrefix   = "stream_"
 )
 
-var allowedParameters = []string{natsV1QueryParameter, jetstreamQueryParameter, "subject", "stream_name", "stream_description", "stream_subjects",
-	"consumer_max_count", "consumer_request_batch", "consumer_request_max_batch_bytes", "consumer_durable",
-	"consumer_request_timeout_ms", "consumer_max_request_expires_ms", "consumer_max_waiting", "consumer_ack_wait_timeout_ms",
-	"consumer_max_ack_pending"}
-
+var allowedParameters = []string{natsV1QueryParameter, jetstreamQueryParameter, QueryParamSubject,
+	"batch_max_handlers", "batch_min_batch_size", "batch_max_batch_size", "batch_max_batch_byte_size",
+	"stream_name", "stream_description", "stream_subjects", "stream_retention", "stream_max_consumers",
+	"stream_max_msgs", "stream_max_bytes", "stream_discard", "stream_discard_new_per_subject", "stream_max_age",
+	"stream_max_msgs_per_subject", "stream_max_msg_size", "stream_storage", "stream_num_replicas", "stream_no_ack",
+	"stream_duplicate_window", "stream_placement", "stream_mirror", "stream_sources", "stream_sealed",
+	"stream_deny_delete", "stream_deny_purge", "stream_allow_rollup_hdrs", "stream_compression", "stream_first_seq",
+	"stream_subject_transform", "stream_republish", "stream_allow_direct", "stream_mirror_direct", "stream_consumer_limits",
+	"stream_metadata", "stream_template_owner", "stream_allow_msg_ttl", "stream_subject_delete_marker_ttl",
+	"consumer_name", "consumer_durable_name", "consumer_description", "consumer_deliver_policy",
+	"consumer_opt_start_seq", "consumer_opt_start_time", "consumer_ack_policy", "consumer_ack_wait",
+	"consumer_max_deliver", "consumer_backoff", "consumer_filter_subject", "consumer_replay_policy",
+	"consumer_rate_limit_bps", "consumer_sample_freq", "consumer_max_waiting", "consumer_max_ack_pending",
+	"consumer_headers_only", "consumer_max_batch", "consumer_max_expires", "consumer_max_bytes",
+	"consumer_inactive_threshold", "consumer_num_replicas", "consumer_mem_storage", "consumer_filter_subjects",
+	"consumer_metadata", "consumer_pause_until", "consumer_priority_policy", "consumer_priority_timeout",
+	"consumer_priority_groups"}
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
-var errNotSupportedParameter = fmt.Errorf("natspubsub: invalid parameter used, "+
-	"only the parameters [ %s ] are supported and can be used",
-	strings.Join(allowedParameters, ", "))
+var errNotSupportedParameter = fmt.Errorf("natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
 
 func init() {
 	o := new(defaultDialer)
@@ -133,7 +149,7 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnable
 
 	sv, err := connections.ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
+		return nil, fmt.Errorf("natspubsub: failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
 	}
 
 	var conn connections.Connection
@@ -212,7 +228,7 @@ type URLOpener struct {
 }
 
 func cleanSubjectFromUrl(u *url.URL) (string, error) {
-	subject := u.Query().Get("subject")
+	subject := u.Query().Get(QueryParamSubject)
 
 	// Clean the leading slash from the path
 	pathPart := strings.TrimPrefix(u.Path, "/")
@@ -276,56 +292,59 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	opts := &o.SubscriptionOptions
 
-	subject, err := cleanSubjectFromUrl(u)
+	var err error
+	opts.Subject, err = cleanSubjectFromUrl(u)
 	if err != nil {
 		return nil, err
 	}
 
-	opts.Subjects = []string{subject}
-	opts.Durable = u.Query().Get("consumer_durable")
+	queryParams := u.Query()
 
-	opts.ConsumersMaxCount, err = strconv.Atoi(u.Query().Get("consumer_max_count"))
-	if err != nil {
-		opts.ConsumersMaxCount = 10
-	}
-	opts.ConsumerRequestBatch, err = strconv.Atoi(u.Query().Get("consumer_request_batch"))
-	if err != nil {
-		opts.ConsumerRequestBatch = 50
-	}
-	opts.ConsumerRequestMaxBatchBytes, err = strconv.Atoi(u.Query().Get("consumer_request_max_batch_bytes"))
-	if err != nil {
-		opts.ConsumerRequestMaxBatchBytes = 0
-	}
+	streamMap := make(map[string]string)
+	consumerMap := make(map[string]string)
+	batchMap := make(map[string]string)
+	for key, values := range queryParams {
+		// Use the first value if multiple values exist for a key
+		if len(values) == 0 {
+			continue
+		}
 
-	opts.ConsumerRequestTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_request_timeout_ms"))
-	if err != nil {
-		opts.ConsumerRequestTimeoutMs = 1000
-	}
-
-	opts.ConsumerMaxRequestExpiresMs, err = strconv.Atoi(u.Query().Get("consumer_max_request_expires_ms"))
-	if err != nil {
-		opts.ConsumerMaxRequestExpiresMs = 30000
+		configVal := values[0]
+		if strings.HasPrefix(key, StreamConfigPrefix) {
+			streamMap[strings.TrimPrefix(key, StreamConfigPrefix)] = configVal
+		} else if strings.HasPrefix(key, ConsumerConfigPrefix) {
+			consumerMap[strings.TrimPrefix(key, ConsumerConfigPrefix)] = configVal
+		} else if strings.HasPrefix(key, BatchConfigPrefix) {
+			batchMap[strings.TrimPrefix(key, BatchConfigPrefix)] = configVal
+		}
 	}
 
-	opts.ConsumerMaxWaiting, err = strconv.Atoi(u.Query().Get("consumer_max_waiting"))
+	jsonData, err := json.Marshal(streamMap)
 	if err != nil {
-		opts.ConsumerMaxWaiting = 100
+		return nil, err
 	}
 
-	opts.ConsumerAckWaitTimeoutMs, err = strconv.Atoi(u.Query().Get("consumer_ack_wait_timeout_ms"))
+	err = json.Unmarshal(jsonData, &opts.StreamConfig)
 	if err != nil {
-		opts.ConsumerAckWaitTimeoutMs = 300000
-	}
-	opts.ConsumerMaxAckPending, err = strconv.Atoi(u.Query().Get("consumer_max_ack_pending"))
-	if err != nil {
-		opts.ConsumerMaxAckPending = 100
+		return nil, err
 	}
 
-	opts.StreamName = u.Query().Get("stream_name")
-	opts.StreamDescription = u.Query().Get("stream_description")
-	streamSubject := u.Query().Get("stream_subject")
-	if streamSubject != "" {
-		opts.Subjects = append(opts.Subjects, strings.Split(streamSubject, ",")...)
+	jsonData, err = json.Marshal(consumerMap)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(jsonData, &opts.ConsumerConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	jsonData, err = json.Marshal(batchMap)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(jsonData, &opts.BatchConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return OpenSubscription(ctx, o.Connection, opts)
@@ -483,25 +502,7 @@ func OpenSubscription(ctx context.Context, conn connections.Connection, opts *co
 		return nil, err
 	}
 
-	maxConsumerCount := opts.ConsumersMaxCount
-	if maxConsumerCount <= 0 {
-		maxConsumerCount = 1
-	}
-
-	maxBatchSize := opts.ConsumerRequestBatch
-	if maxBatchSize <= 0 {
-		maxBatchSize = 1
-	}
-
-	maxBatchBytesSize := opts.ConsumerRequestMaxBatchBytes
-
-	var recvBatcherOpts = &batcher.Options{
-		MaxHandlers:      maxConsumerCount, // max concurrency for receives
-		MaxBatchSize:     maxBatchSize,
-		MaxBatchByteSize: maxBatchBytesSize,
-	}
-
-	return pubsub.NewSubscription(ds, recvBatcherOpts, nil), nil
+	return pubsub.NewSubscription(ds, &opts.BatchConfig, nil), nil
 }
 
 func openSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
