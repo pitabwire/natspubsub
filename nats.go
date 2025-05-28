@@ -248,6 +248,24 @@ func cleanSubjectFromUrl(u *url.URL) (string, error) {
 	return subject, nil
 }
 
+func cleanSettingValue(key, val string) any {
+	val = strings.TrimSpace(val)
+
+	if strings.HasPrefix(val, "max_") ||
+		strings.HasPrefix(val, "num_") ||
+		slices.Contains([]string{
+			"duplicate_window", "first_seq", "opt_start_seq", "ack_wait",
+			"rate_limit_bps", "inactive_threshold", "priority_timeout"}, val) {
+		i, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return val
+		}
+		return i
+	}
+
+	return val
+}
+
 // OpenTopicURL opens a pubsub.Topic based on a url supplied.
 //
 //	A topic can be specified in the subject and suffixed by the url path
@@ -300,9 +318,9 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	queryParams := u.Query()
 
-	streamMap := make(map[string]string)
-	consumerMap := make(map[string]string)
-	batchMap := make(map[string]string)
+	streamMap := make(map[string]any)
+	consumerMap := make(map[string]any)
+	batchMap := make(map[string]any)
 	for key, values := range queryParams {
 		// Use the first value if multiple values exist for a key
 		if len(values) == 0 {
@@ -311,11 +329,11 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 		configVal := values[0]
 		if strings.HasPrefix(key, StreamConfigPrefix) {
-			streamMap[strings.TrimPrefix(key, StreamConfigPrefix)] = configVal
+			streamMap[strings.TrimPrefix(key, StreamConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, StreamConfigPrefix), configVal)
 		} else if strings.HasPrefix(key, ConsumerConfigPrefix) {
-			consumerMap[strings.TrimPrefix(key, ConsumerConfigPrefix)] = configVal
+			consumerMap[strings.TrimPrefix(key, ConsumerConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, ConsumerConfigPrefix), configVal)
 		} else if strings.HasPrefix(key, BatchConfigPrefix) {
-			batchMap[strings.TrimPrefix(key, BatchConfigPrefix)] = configVal
+			batchMap[strings.TrimPrefix(key, BatchConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, BatchConfigPrefix), configVal)
 		}
 	}
 
