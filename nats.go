@@ -251,11 +251,11 @@ func cleanSubjectFromUrl(u *url.URL) (string, error) {
 func cleanSettingValue(key, val string) any {
 	val = strings.TrimSpace(val)
 
-	if strings.HasPrefix(val, "max_") ||
-		strings.HasPrefix(val, "num_") ||
+	if strings.HasPrefix(key, "max_") ||
+		strings.HasPrefix(key, "num_") ||
 		slices.Contains([]string{
 			"duplicate_window", "first_seq", "opt_start_seq", "ack_wait",
-			"rate_limit_bps", "inactive_threshold", "priority_timeout"}, val) {
+			"rate_limit_bps", "inactive_threshold", "priority_timeout"}, key) {
 		i, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return val
@@ -264,7 +264,7 @@ func cleanSettingValue(key, val string) any {
 	} else if slices.Contains([]string{
 		"mem_storage", "headers_only", "discard_new_per_subject", "no_ack",
 		"sealed", "deny_delete", "deny_purge", "allow_rollup_hdrs", "allow_direct",
-		"mirror_direct", "allow_msg_ttl"}, val) {
+		"mirror_direct", "allow_msg_ttl"}, key) {
 		i, err := strconv.ParseBool(val)
 		if err != nil {
 			return val
