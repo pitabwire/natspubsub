@@ -114,7 +114,6 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 		if len(values) != 1 {
 			return nil, errDuplicateParameter
 		}
-
 	}
 
 	storedOpener, ok := o.openerMap.Load(connectionUrl)
@@ -270,6 +269,8 @@ func cleanSettingValue(key, val string) any {
 			return val
 		}
 		return i
+	} else if slices.Contains([]string{"subjects", "filter_subjects", "priority_groups"}, key) {
+		return strings.Split(val, ",")
 	}
 
 	return val
