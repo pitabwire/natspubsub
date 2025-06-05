@@ -650,6 +650,12 @@ func TestCleanSubjectFromUrl(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name:        "No subject query, for jetstream",
+			inputURL:    "http://example.com/?jetstream=true",
+			expected:    "",
+			expectError: false,
+		},
+		{
 			name:        "Subject with allowed special characters",
 			inputURL:    "http://example.com/testPath?subject=test.Subject.*.>",
 			expected:    "test.Subject.*.>.testPath",

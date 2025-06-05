@@ -241,7 +241,7 @@ func cleanSubjectFromUrl(u *url.URL) (string, error) {
 		}
 	}
 
-	if subject == "" {
+	if subject == "" && !u.Query().Has("jetstream") {
 		return "", errNotSubjectInitialized
 	}
 
@@ -257,6 +257,15 @@ func cleanSettingValue(key, val string) any {
 			"duplicate_window", "first_seq", "opt_start_seq", "ack_wait",
 			"rate_limit_bps", "inactive_threshold", "priority_timeout"}, val) {
 		i, err := strconv.ParseInt(val, 10, 64)
+		if err != nil {
+			return val
+		}
+		return i
+	} else if slices.Contains([]string{
+		"mem_storage", "headers_only", "discard_new_per_subject", "no_ack",
+		"sealed", "deny_delete", "deny_purge", "allow_rollup_hdrs", "allow_direct",
+		"mirror_direct", "allow_msg_ttl"}, val) {
+		i, err := strconv.ParseBool(val)
 		if err != nil {
 			return val
 		}

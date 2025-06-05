@@ -37,12 +37,10 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 	}
 
 	if stream == nil {
-
 		stream, err = c.jetStream.CreateStream(ctx, opts.StreamConfig)
 		if err != nil {
 			return nil, err
 		}
-
 	}
 
 	isDurableQueue := opts.ConsumerConfig.Durable != ""
