@@ -109,7 +109,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(_ context.Context, batchCount int) 
 		batchCount = 1
 	}
 
-	msgBatch, err := jc.consumer.Fetch(batchCount)
+	msgBatch, err := jc.consumer.FetchNoWait(batchCount)
 	if err != nil {
 		return nil, err
 	}
