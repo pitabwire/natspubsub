@@ -124,37 +124,80 @@ func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()
 }
 
-func (q *natsConsumer) ReceiveMessages(_ context.Context, _ int) ([]*driver.Message, error) {
-
+func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
 	var messages []*driver.Message
 
-	msg, err := q.consumer.NextMsg(q.batchFetchTimeout)
-	if err != nil {
-		if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
-			return messages, nil
+	if batchCount <= 0 {
+		batchCount = 1
+	}
+
+	// Use the context's deadline if available, otherwise fall back to the configured timeout
+	fetchTimeout := q.batchFetchTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		// Use the remaining time from the context, but don't exceed our configured timeout
+		remainingTime := time.Until(deadline)
+		if remainingTime < fetchTimeout {
+			fetchTimeout = remainingTime
+		}
+		// Ensure we have at least a minimal timeout to prevent spinning
+		if fetchTimeout <= 0 {
+			fetchTimeout = time.Millisecond
+		}
+	}
+
+	// Try to fetch up to batchCount messages without blocking too long on any single message
+	// This helps prevent deadlocks while still attempting to fill the batch
+	for i := 0; i < batchCount; i++ {
+		// Check if context is done before attempting to fetch each message
+		if err := ctx.Err(); err != nil {
+			return messages, err
 		}
 
-		return nil, err
-	}
+		// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
+		attemptTimeout := fetchTimeout
+		if i > 0 {
+			// Use progressively shorter timeouts for subsequent messages
+			// This enables quick return when no more messages are available
+			attemptTimeout = fetchTimeout / time.Duration(i*2+1)
+			if attemptTimeout < time.Millisecond {
+				attemptTimeout = time.Millisecond
+			}
+		}
 
-	var driverMsg *driver.Message
-	if q.UseV1Decoding() {
-		driverMsg, err = decodeV1Message(msg)
-	} else {
-		driverMsg, err = decodeMessage(msg)
-	}
+		msg, err := q.consumer.NextMsg(attemptTimeout)
+		if err != nil {
+			// Not an error if we timeout or context is cancelled
+			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+				// Just return what we have so far
+				return messages, nil
+			}
+			// For other errors, stop and return the error
+			return nil, err
+		}
 
-	if err != nil {
-		return nil, err
-	}
+		var driverMsg *driver.Message
+		if q.UseV1Decoding() {
+			driverMsg, err = decodeV1Message(msg)
+		} else {
+			driverMsg, err = decodeMessage(msg)
+		}
 
-	messages = append(messages, driverMsg)
+		if err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, driverMsg)
+	}
 
 	return messages, nil
-
 }
 
-func (q *natsConsumer) Ack(_ context.Context, ids []driver.AckID) error {
+func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
+	// Check for context cancellation first
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {
@@ -166,7 +209,12 @@ func (q *natsConsumer) Ack(_ context.Context, ids []driver.AckID) error {
 	return nil
 }
 
-func (q *natsConsumer) Nack(_ context.Context, ids []driver.AckID) error {
+func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
+	// Check for context cancellation first
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {
