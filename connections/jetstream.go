@@ -102,7 +102,8 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 }
 
 func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-	var messages []*driver.Message
+	// Pre-allocate message slice with capacity of batchCount to reduce allocations
+	messages := make([]*driver.Message, 0, batchCount)
 
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
@@ -120,31 +121,27 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		return nil, err
 	}
 
-	// Process messages from the batch channel
+	// Process messages from the batch channel with timeout to avoid blocking forever
+	messagesChan := msgBatch.Messages()
+
+	// Process messages while being responsive to context cancellation
 	for {
 		select {
-		// Check for context cancellation between message processing
-
 		case <-ctx.Done():
 			return messages, ctx.Err()
-		case msg, ok := <-msgBatch.Messages():
+		case msg, ok := <-messagesChan:
 			if !ok {
-				// Check for errors after batch is complete
-
-				err = msgBatch.Error()
-				return messages, err
+				// Channel closed, we've processed all messages
+				return messages, msgBatch.Error()
 			}
-
-			var driverMsg *driver.Message
-			driverMsg, err = decodeJetstreamMessage(msg)
+			
+			driverMsg, err := decodeJetstreamMessage(msg)
 			if err != nil {
 				return nil, err
 			}
-
 			messages = append(messages, driverMsg)
 		}
 	}
-
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
@@ -224,7 +221,8 @@ func decodeJetstreamMessage(msg jetstream.Msg) (*driver.Message, error) {
 	}
 
 	if msg.Headers() != nil {
-		dm.Metadata = map[string]string{}
+		// Pre-allocate metadata map with the expected capacity
+		dm.Metadata = make(map[string]string, len(msg.Headers()))
 		for k, v := range msg.Headers() {
 			var sv string
 			if len(v) > 0 {

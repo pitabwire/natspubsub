@@ -8,8 +8,16 @@ import (
 	"github.com/nats-io/nats.go"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
+	"sync"
 	"time"
 )
+
+// bufferPool provides reusable byte buffers for encoding/decoding operations
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return new(bytes.Buffer)
+	},
+}
 
 func NewPlainWithEncodingV1(natsConn *nats.Conn, useV1Encoding bool) (Connection, error) {
 	sv, err := ServerVersion(natsConn.ConnectedServerVersion())
@@ -125,7 +133,8 @@ func (q *natsConsumer) Unsubscribe() error {
 }
 
 func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-	var messages []*driver.Message
+	// Pre-allocate message slice with capacity of batchCount to reduce allocations
+	messages := make([]*driver.Message, 0, batchCount)
 
 	if batchCount <= 0 {
 		batchCount = 1
@@ -241,23 +250,26 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
 		return nil, nats.ErrInvalidMsg
 	}
-	var dm driver.Message
-
+	
+	dm := &driver.Message{}
 	dm.AckID = msg // Set to the original NATS message for proper acking
 	dm.AsFunc = messageAsFunc(msg)
 
 	// Try to decode as a v1 encoded message (with metadata and body encoded using gob)
-	buf := bytes.NewBuffer(msg.Data)
+	buf := bufferPool.Get().(*bytes.Buffer)
+	defer bufferPool.Put(buf)
+	buf.Reset()
+	buf.Write(msg.Data)
 	dec := gob.NewDecoder(buf)
 
-	metadata := make(map[string]string)
+	// Estimate initial metadata map size to minimize allocations
+	metadata := make(map[string]string, 8) // A reasonable starting size for most messages
 	if err := dec.Decode(&metadata); err != nil {
 		// If we can't decode as v1 format, treat the entire payload as body
 		dm.Metadata = nil
 		dm.Body = msg.Data
-		return &dm, nil
+		return dm, nil
 	}
-
 	dm.Metadata = metadata
 
 	// Now decode the body
@@ -267,7 +279,7 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	}
 	dm.Body = body
 
-	return &dm, nil
+	return dm, nil
 }
 
 func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
@@ -281,7 +293,8 @@ func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 	}
 
 	if msg.Header != nil {
-		dm.Metadata = map[string]string{}
+		// Pre-allocate metadata map with the expected capacity
+		dm.Metadata = make(map[string]string, len(msg.Header))
 		for k, v := range msg.Header {
 			var sv string
 			if len(v) > 0 {
