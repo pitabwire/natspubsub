@@ -53,13 +53,15 @@ const (
 
 	QueryParamSubject = "subject"
 
-	BatchConfigPrefix    = "batch_"
-	ConsumerConfigPrefix = "consumer_"
-	StreamConfigPrefix   = "stream_"
+	ReceiveBatchConfigPrefix = "receive_batch_"
+	AckBatchConfigPrefix     = "ack_batch_"
+	ConsumerConfigPrefix     = "consumer_"
+	StreamConfigPrefix       = "stream_"
 )
 
 var allowedParameters = []string{natsV1QueryParameter, jetstreamQueryParameter, QueryParamSubject,
-	"batch_max_handlers", "batch_min_batch_size", "batch_max_batch_size", "batch_max_batch_byte_size",
+	"receive_batch_max_handlers", "receive_batch_min_batch_size", "receive_batch_max_batch_size", "receive_batch_max_batch_byte_size",
+	"ack_batch_max_handlers", "ack_batch_min_batch_size", "ack_batch_max_batch_size", "ack_batch_max_batch_byte_size",
 	"stream_name", "stream_description", "stream_subjects", "stream_retention", "stream_max_consumers",
 	"stream_max_msgs", "stream_max_bytes", "stream_discard", "stream_discard_new_per_subject", "stream_max_age",
 	"stream_max_msgs_per_subject", "stream_max_msg_size", "stream_storage", "stream_num_replicas", "stream_no_ack",
@@ -330,7 +332,8 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	streamMap := make(map[string]any)
 	consumerMap := make(map[string]any)
-	batchMap := make(map[string]any)
+	receiveBatchMap := make(map[string]any)
+	ackBatchMap := make(map[string]any)
 	for key, values := range queryParams {
 		// Use the first value if multiple values exist for a key
 		if len(values) == 0 {
@@ -342,8 +345,10 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 			streamMap[strings.TrimPrefix(key, StreamConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, StreamConfigPrefix), configVal)
 		} else if strings.HasPrefix(key, ConsumerConfigPrefix) {
 			consumerMap[strings.TrimPrefix(key, ConsumerConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, ConsumerConfigPrefix), configVal)
-		} else if strings.HasPrefix(key, BatchConfigPrefix) {
-			batchMap[strings.TrimPrefix(key, BatchConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, BatchConfigPrefix), configVal)
+		} else if strings.HasPrefix(key, ReceiveBatchConfigPrefix) {
+			receiveBatchMap[strings.TrimPrefix(key, ReceiveBatchConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, ReceiveBatchConfigPrefix), configVal)
+		} else if strings.HasPrefix(key, AckBatchConfigPrefix) {
+			ackBatchMap[strings.TrimPrefix(key, AckBatchConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, AckBatchConfigPrefix), configVal)
 		}
 	}
 
@@ -366,11 +371,20 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 		return nil, err
 	}
 
-	jsonData, err = json.Marshal(batchMap)
+	jsonData, err = json.Marshal(receiveBatchMap)
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(jsonData, &opts.BatchConfig)
+	err = json.Unmarshal(jsonData, &opts.ReceiveBatchConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	jsonData, err = json.Marshal(ackBatchMap)
+	if err != nil {
+		return nil, err
+	}
+	err = json.Unmarshal(jsonData, &opts.AckBatchConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +544,7 @@ func OpenSubscription(ctx context.Context, conn connections.Connection, opts *co
 		return nil, err
 	}
 
-	return pubsub.NewSubscription(ds, &opts.BatchConfig, nil), nil
+	return pubsub.NewSubscription(ds, opts.ReceiveBatchConfig.To(), opts.AckBatchConfig.To()), nil
 }
 
 func openSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (driver.Subscription, error) {

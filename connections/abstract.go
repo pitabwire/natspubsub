@@ -29,6 +29,26 @@ type TopicOptions struct {
 	Subject string
 }
 
+type BatchOptions struct {
+	// Maximum number of concurrent handlers. Defaults to 1.
+	MaxHandlers int `json:"max_handlers"`
+	// Minimum size of a batch. Defaults to 1.
+	MinBatchSize int `json:"min_batch_size"`
+	// Maximum size of a batch. 0 means no limit.
+	MaxBatchSize int `json:"max_batch_size"`
+	// Maximum bytesize of a batch. 0 means no limit.
+	MaxBatchByteSize int `json:"max_batch_byte_size"`
+}
+
+func (b *BatchOptions) To() *batcher.Options {
+	return &batcher.Options{
+		MaxHandlers:      b.MaxHandlers,
+		MinBatchSize:     b.MinBatchSize,
+		MaxBatchSize:     b.MaxBatchSize,
+		MaxBatchByteSize: b.MaxBatchByteSize,
+	}
+}
+
 // SubscriptionOptions sets options for subscribing to NATS.
 // Stream Options are useful for initial setup especially when creating streams/queues
 // these will later be subscribed to by the consumers of nats messages.
@@ -36,9 +56,10 @@ type TopicOptions struct {
 type SubscriptionOptions struct {
 	Subject string
 
-	BatchConfig    batcher.Options
-	StreamConfig   jetstream.StreamConfig
-	ConsumerConfig jetstream.ConsumerConfig
+	ReceiveBatchConfig BatchOptions
+	AckBatchConfig     BatchOptions
+	StreamConfig       jetstream.StreamConfig
+	ConsumerConfig     jetstream.ConsumerConfig
 }
 
 type Queue interface {
