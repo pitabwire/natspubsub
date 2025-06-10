@@ -133,7 +133,6 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 			return messages, ctx.Err()
 		case msg, ok := <-messagesChan:
 			if !ok {
-				fmt.Println("Received messages : ", len(messages))
 				// Channel closed, we've processed all messages
 				return messages, msgBatch.Error()
 			}
@@ -166,7 +165,6 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 
 		// We don't use DoubleAck as it fails conformance tests
 		err := msg.Ack()
-		fmt.Println("Successfully acked message : ", err)
 		if err != nil {
 			// Log the error but continue processing other messages
 			// We don't return the error to maintain compatibility with existing tests
@@ -196,7 +194,6 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 		}
 
 		err := msg.Nak()
-		fmt.Println("Successfully nacked message : ", err)
 		if err != nil {
 			// Log the error but continue processing other messages
 			// We don't return the error to maintain compatibility with existing tests
