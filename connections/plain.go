@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/gob"
 	"errors"
+	"fmt"
 	"github.com/nats-io/nats.go"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // bufferPool provides reusable byte buffers for encoding/decoding operations
@@ -100,6 +102,13 @@ type plainNatsTopic struct {
 
 func (t *plainNatsTopic) UseV1Encoding() bool {
 	return t.useV1Encoding
+}
+
+func (t *plainNatsTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
+	if t.useV1Encoding {
+		return encodeV1Message(dm, t.Subject())
+	}
+	return encodeMessage(dm, t.Subject())
 }
 func (t *plainNatsTopic) Subject() string {
 	return t.subject
@@ -206,7 +215,7 @@ func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	
+
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {
@@ -223,7 +232,7 @@ func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	
+
 	for _, id := range ids {
 		msg, ok := id.(*nats.Msg)
 		if !ok {
@@ -250,7 +259,7 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
 		return nil, nats.ErrInvalidMsg
 	}
-	
+
 	dm := &driver.Message{}
 	dm.AckID = msg // Set to the original NATS message for proper acking
 	dm.AsFunc = messageAsFunc(msg)
@@ -282,6 +291,24 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	return dm, nil
 }
 
+func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	// Always encode metadata, even if empty - this ensures consistent message format
+	if err := enc.Encode(dm.Metadata); err != nil {
+		return nil, err
+	}
+	if err := enc.Encode(dm.Body); err != nil {
+		return nil, err
+	}
+	return &nats.Msg{
+		Subject: sub,
+		Data:    buf.Bytes(),
+	}, nil
+
+}
+
 func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
 		return nil, nats.ErrInvalidMsg
@@ -300,19 +327,49 @@ func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 			if len(v) > 0 {
 				sv = v[0]
 			}
-			kb, err := url.QueryUnescape(k)
+			// Decode URL-encoded key and value
+			decodedKey, err := url.QueryUnescape(k)
 			if err != nil {
-				return nil, err
+				decodedKey = k // Fallback to original if decoding fails
 			}
-			vb, err := url.QueryUnescape(sv)
+
+			decodedValue, err := url.QueryUnescape(sv)
 			if err != nil {
-				return nil, err
+				decodedValue = sv // Fallback to original if decoding fails
 			}
-			dm.Metadata[kb] = vb
+
+			dm.Metadata[decodedKey] = decodedValue
 		}
 	}
 
 	dm.AckID = msg
 
 	return &dm, nil
+}
+
+func encodeMessage(dm *driver.Message, sub string) (*nats.Msg, error) {
+	var header nats.Header
+	if dm.Metadata != nil {
+		header = nats.Header{}
+		for k, v := range dm.Metadata {
+
+			if !utf8.ValidString(k) {
+				return nil, fmt.Errorf("pubsub: Message.Metadata keys must be valid UTF-8 strings: %q", k)
+			}
+			if !utf8.ValidString(v) {
+				return nil, fmt.Errorf("pubsub: Message.Metadata values must be valid UTF-8 strings: %q", v)
+			}
+
+			// URL encode the key and value
+			encodedKey := url.QueryEscape(k)
+			encodedValue := url.QueryEscape(v)
+
+			header.Add(encodedKey, encodedValue)
+		}
+	}
+	return &nats.Msg{
+		Subject: sub,
+		Data:    dm.Body,
+		Header:  header,
+	}, nil
 }

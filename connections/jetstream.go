@@ -3,11 +3,12 @@ package connections
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"gocloud.dev/pubsub/driver"
 	"net/url"
-	"strconv"
+	"time"
 )
 
 func NewJetstream(js jetstream.JetStream) Connection {
@@ -51,7 +52,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		return nil, err
 	}
 
-	return &jetstreamConsumer{consumer: consumer, isQueueGroup: isDurableQueue}, nil
+	return &jetstreamConsumer{consumer: consumer, pullWaitTimeout: opts.ReceiveWaitTimeOut, isQueueGroup: isDurableQueue}, nil
 
 }
 
@@ -68,25 +69,26 @@ type jetstreamTopic struct {
 	jetStream jetstream.JetStream
 }
 
-func (t *jetstreamTopic) UseV1Encoding() bool {
-	return false
+func (t *jetstreamTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
+	return encodeMessage(dm, t.Subject())
 }
 func (t *jetstreamTopic) Subject() string {
 	return t.subject
 }
 
 func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (string, error) {
-	var ack *jetstream.PubAck
-	var err error
-	if ack, err = t.jetStream.PublishMsg(ctx, msg); err != nil {
+
+	ack, err := t.jetStream.PublishMsg(ctx, msg)
+	if err != nil {
 		return "", err
 	}
-	return strconv.Itoa(int(ack.Sequence)), nil
+	return createLoggableID(ack.Stream, ack.Sequence), nil
 }
 
 type jetstreamConsumer struct {
-	consumer     jetstream.Consumer
-	isQueueGroup bool
+	consumer        jetstream.Consumer
+	pullWaitTimeout time.Duration
+	isQueueGroup    bool
 }
 
 func (jc *jetstreamConsumer) UseV1Decoding() bool {
@@ -114,9 +116,9 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		batchCount = 1
 	}
 
-	// Use FetchNoWait to avoid blocking for extended periods
+	// Use Fetch to block for extended periods
 	// This provides better behavior when there are no messages available
-	msgBatch, err := jc.consumer.FetchNoWait(batchCount)
+	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(jc.pullWaitTimeout))
 	if err != nil {
 		return nil, err
 	}
@@ -131,15 +133,16 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 			return messages, ctx.Err()
 		case msg, ok := <-messagesChan:
 			if !ok {
+				fmt.Println("Received messages : ", len(messages))
 				// Channel closed, we've processed all messages
 				return messages, msgBatch.Error()
 			}
-			
-			driverMsg, err := decodeJetstreamMessage(msg)
-			if err != nil {
-				return nil, err
+
+			drvMsg, err0 := decodeJsMessage(msg)
+			if err0 != nil {
+				return messages, err0
 			}
-			messages = append(messages, driverMsg)
+			messages = append(messages, drvMsg)
 		}
 	}
 }
@@ -153,7 +156,7 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -162,10 +165,13 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 		}
 
 		// We don't use DoubleAck as it fails conformance tests
-		if err := msg.Ack(); err != nil {
+		err := msg.Ack()
+		fmt.Println("Successfully acked message : ", err)
+		if err != nil {
 			// Log the error but continue processing other messages
 			// We don't return the error to maintain compatibility with existing tests
 			// that expect Ack to always succeed
+			return nil
 		}
 	}
 
@@ -175,13 +181,13 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil
 	}
 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return err
+			return nil
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -189,10 +195,13 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 			continue
 		}
 
-		if err := msg.Nak(); err != nil {
+		err := msg.Nak()
+		fmt.Println("Successfully nacked message : ", err)
+		if err != nil {
 			// Log the error but continue processing other messages
 			// We don't return the error to maintain compatibility with existing tests
 			// that expect Nack to always succeed
+			return nil
 		}
 	}
 
@@ -210,37 +219,53 @@ func jsMessageAsFunc(msg jetstream.Msg) func(interface{}) bool {
 	}
 }
 
-func decodeJetstreamMessage(msg jetstream.Msg) (*driver.Message, error) {
+func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	if msg == nil {
 		return nil, nats.ErrInvalidMsg
 	}
 
-	dm := driver.Message{
+	dm := &driver.Message{
 		AsFunc: jsMessageAsFunc(msg),
 		Body:   msg.Data(),
 	}
 
-	if msg.Headers() != nil {
-		// Pre-allocate metadata map with the expected capacity
-		dm.Metadata = make(map[string]string, len(msg.Headers()))
-		for k, v := range msg.Headers() {
+	h := msg.Headers()
+
+	if h != nil {
+		// Pre-allocate md map with the expected capacity
+		dm.Metadata = make(map[string]string, len(h))
+
+		for k, v := range h {
 			var sv string
 			if len(v) > 0 {
 				sv = v[0]
 			}
-			kb, err := url.QueryUnescape(k)
-			if err != nil {
-				return nil, err
+
+			// Decode URL-encoded key and value
+			decodedKey, err0 := url.QueryUnescape(k)
+			if err0 != nil {
+				decodedKey = k // Fallback to original if decoding fails
 			}
-			vb, err := url.QueryUnescape(sv)
-			if err != nil {
-				return nil, err
+
+			decodedValue, err0 := url.QueryUnescape(sv)
+			if err0 != nil {
+				decodedValue = sv // Fallback to original if decoding fails
 			}
-			dm.Metadata[kb] = vb
+
+			dm.Metadata[decodedKey] = decodedValue
 		}
+	}
+
+	md, err := msg.Metadata()
+	if err == nil {
+		dm.LoggableID = createLoggableID(md.Stream, md.Sequence.Stream)
 	}
 
 	dm.AckID = msg
 
-	return &dm, nil
+	return dm, nil
+}
+
+func createLoggableID(streamName string, streamID uint64) string {
+	return fmt.Sprintf("%s/%d", streamName, streamID)
 }

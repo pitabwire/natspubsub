@@ -82,6 +82,7 @@ func newJetstreamHarness(ctx context.Context, t *testing.T) (drivertest.Harness,
 	opts.Port = testPort
 	opts.JetStream = true
 	s := gnatsd.RunServer(&opts)
+
 	nc, err := nats.Connect(fmt.Sprintf(testServerUrlFmt, testPort))
 	if err != nil {
 		return nil, err
@@ -105,7 +106,9 @@ type harness struct {
 func (h *harness) CreateTopic(ctx context.Context, testName string) (driver.Topic, func(), error) {
 	cleanup := func() {}
 
-	pOpts := &connections.TopicOptions{Subject: testName}
+	subject := fmt.Sprintf("%s.%s", testName, uuid.New().String()[:8])
+
+	pOpts := &connections.TopicOptions{Subject: subject}
 
 	dt, err := openTopic(ctx, h.conn, pOpts)
 	if err != nil {
@@ -121,16 +124,50 @@ func (h *harness) MakeNonexistentTopic(ctx context.Context) (driver.Topic, error
 
 func defaultSubOptions(subject, testName string) *connections.SubscriptionOptions {
 
-	streamName := strings.ReplaceAll(testName, "/", "_")
-	// If the consumers are durable, ensure that each subscription has a unique consumer name.
-	uniqueConsumerName := streamName + "-" + uuid.New().String()
-	opts := &connections.SubscriptionOptions{
-		Subject: subject,
+	// Ensure stream name is valid for NATS
+	streamName := sanitizeStreamName(subject)
 
-		StreamConfig:   jetstream.StreamConfig{Name: streamName, Subjects: []string{subject}},
-		ConsumerConfig: jetstream.ConsumerConfig{Name: uniqueConsumerName, Durable: uniqueConsumerName, MaxRequestExpires: 30000 * time.Millisecond},
+	// Create consumer name with test name and random suffix
+	consumerName := fmt.Sprintf(
+		"%s%s_%s", testName, streamName, uuid.New().String()[:8],
+	)
+	consumerName = strings.ReplaceAll(consumerName, "/", "_")
+
+	return &connections.SubscriptionOptions{
+		Subject:            subject,
+		ReceiveWaitTimeOut: 500 * time.Millisecond,
+		StreamConfig: jetstream.StreamConfig{
+			Name:      streamName,
+			Subjects:  []string{subject},
+			Retention: jetstream.InterestPolicy, // Or another policy that fits your needs
+			Storage:   jetstream.MemoryStorage,  // Faster for tests
+		},
+		ConsumerConfig: jetstream.ConsumerConfig{
+			Name:          consumerName,
+			FilterSubject: subject,
+		},
 	}
-	return opts
+}
+
+func sanitizeStreamName(name string) string {
+	// Stream names can only contain A-Z, a-z, 0-9, -, _, ., >
+	// Convert other characters to underscores
+	var result strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			result.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			result.WriteRune(r)
+		case r >= '0' && r <= '9':
+			result.WriteRune(r)
+		case r == '-' || r == '_':
+			result.WriteRune(r)
+		default:
+			result.WriteRune('_')
+		}
+	}
+	return result.String()
 }
 
 func (h *harness) CreateSubscription(ctx context.Context, dt driver.Topic, testName string) (driver.Subscription, func(), error) {

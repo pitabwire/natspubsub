@@ -10,6 +10,7 @@ import (
 	"gocloud.dev/pubsub/driver"
 	"regexp"
 	"strconv"
+	"time"
 )
 
 type Version struct {
@@ -56,6 +57,7 @@ func (b *BatchOptions) To() *batcher.Options {
 type SubscriptionOptions struct {
 	Subject string
 
+	ReceiveWaitTimeOut time.Duration
 	ReceiveBatchConfig BatchOptions
 	AckBatchConfig     BatchOptions
 	StreamConfig       jetstream.StreamConfig
@@ -79,7 +81,7 @@ type Queue interface {
 }
 
 type Topic interface {
-	UseV1Encoding() bool
+	Encode(dm *driver.Message) (*nats.Msg, error)
 	Subject() string
 	PublishMessage(ctx context.Context, msg *nats.Msg) (string, error)
 }

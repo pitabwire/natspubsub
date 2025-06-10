@@ -27,31 +27,32 @@
 package natspubsub
 
 import (
-	"bytes"
 	"context"
-	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/natspubsub/connections"
+	"gocloud.dev/gcerrors"
+	"gocloud.dev/pubsub"
+	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
-	"gocloud.dev/gcerrors"
-	"gocloud.dev/pubsub"
-	"gocloud.dev/pubsub/driver"
+	"github.com/pitabwire/natspubsub/connections"
 )
 
 const (
-	natsV1QueryParameter    = "nats_v1"
-	jetstreamQueryParameter = "jetstream"
+	QueryParameterNatsV1    = "nats_v1"
+	QueryParameterJetstream = "jetstream"
 
-	QueryParamSubject = "subject"
+	QueryParamSubject            = "subject"
+	QueryParamReceiveWaitTimeout = "receive_wait_timeout"
+	DefaultReceiveWaitTimeout    = 30 * time.Second
 
 	ReceiveBatchConfigPrefix = "receive_batch_"
 	AckBatchConfigPrefix     = "ack_batch_"
@@ -59,7 +60,7 @@ const (
 	StreamConfigPrefix       = "stream_"
 )
 
-var allowedParameters = []string{natsV1QueryParameter, jetstreamQueryParameter, QueryParamSubject,
+var allowedParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, QueryParamSubject, QueryParamReceiveWaitTimeout,
 	"receive_batch_max_handlers", "receive_batch_min_batch_size", "receive_batch_max_batch_size", "receive_batch_max_batch_byte_size",
 	"ack_batch_max_handlers", "ack_batch_min_batch_size", "ack_batch_max_batch_size", "ack_batch_max_batch_byte_size",
 	"stream_name", "stream_description", "stream_subjects", "stream_retention", "stream_max_consumers",
@@ -123,8 +124,8 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 		return storedOpener.(*URLOpener), nil
 	}
 
-	useV1Encoding := o.featureIsEnabledViaUrl(serverUrl.Query(), natsV1QueryParameter)
-	isJetstreamEnabled := o.featureIsEnabledViaUrl(serverUrl.Query(), jetstreamQueryParameter)
+	useV1Encoding := o.featureIsEnabledViaUrl(serverUrl.Query(), QueryParameterNatsV1)
+	isJetstreamEnabled := o.featureIsEnabledViaUrl(serverUrl.Query(), QueryParameterJetstream)
 
 	conn, err := o.createConnection(connectionUrl, isJetstreamEnabled, useV1Encoding)
 	if err != nil {
@@ -242,7 +243,7 @@ func cleanSubjectFromUrl(u *url.URL) (string, error) {
 		}
 	}
 
-	if subject == "" && !u.Query().Has("jetstream") {
+	if subject == "" && !u.Query().Has(QueryParameterJetstream) {
 		return "", errNotSubjectInitialized
 	}
 
@@ -252,20 +253,29 @@ func cleanSubjectFromUrl(u *url.URL) (string, error) {
 func cleanSettingValue(key, val string) any {
 	val = strings.TrimSpace(val)
 
-	if strings.HasPrefix(key, "max_") ||
-		strings.HasPrefix(key, "num_") ||
-		slices.Contains([]string{
-			"duplicate_window", "first_seq", "opt_start_seq", "ack_wait",
-			"rate_limit_bps", "inactive_threshold", "priority_timeout"}, key) {
+	if key == "backoff" {
+		var backOff []time.Duration
+		for _, v := range strings.Split(val, ",") {
+			i, err := time.ParseDuration(v)
+			if err != nil {
+				return val
+			}
+			backOff = append(backOff, i)
+		}
+		return backOff
+	} else if slices.Contains([]string{"ack_wait", "max_expires", "inactive_threshold", "priority_timeout", "duplicate_window", "subject_delete_marker_ttl"}, key) {
+		i, err := time.ParseDuration(val)
+		if err != nil {
+			return val
+		}
+		return i
+	} else if strings.HasPrefix(key, "max_") || strings.HasPrefix(key, "num_") || slices.Contains([]string{"duplicate_window", "first_seq", "opt_start_seq", "replay_policy", "rate_limit_bps", "inactive_threshold", "priority_timeout"}, key) {
 		i, err := strconv.ParseInt(val, 10, 64)
 		if err != nil {
 			return val
 		}
 		return i
-	} else if slices.Contains([]string{
-		"mem_storage", "headers_only", "discard_new_per_subject", "no_ack",
-		"sealed", "deny_delete", "deny_purge", "allow_rollup_hdrs", "allow_direct",
-		"mirror_direct", "allow_msg_ttl"}, key) {
+	} else if slices.Contains([]string{"mem_storage", "headers_only", "discard_new_per_subject", "no_ack", "sealed", "deny_delete", "deny_purge", "allow_rollup_hdrs", "allow_direct", "mirror_direct", "allow_msg_ttl"}, key) {
 		i, err := strconv.ParseBool(val)
 		if err != nil {
 			return val
@@ -329,6 +339,11 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 	}
 
 	queryParams := u.Query()
+
+	opts.ReceiveWaitTimeOut, err = time.ParseDuration(queryParams.Get(QueryParamReceiveWaitTimeout))
+	if err != nil {
+		opts.ReceiveWaitTimeOut = DefaultReceiveWaitTimeout
+	}
 
 	streamMap := make(map[string]any)
 	consumerMap := make(map[string]any)
@@ -433,6 +448,7 @@ func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
 	}
 
 	for _, m := range msgs {
+
 		err := ctx.Err()
 		if err != nil {
 			return err
@@ -450,17 +466,14 @@ func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
 func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 	var msg *nats.Msg
 	var err error
-	if t.iTopic.UseV1Encoding() {
-		msg, err = encodeV1Message(m, t.iTopic.Subject())
-		if err != nil {
-			return err
-		}
-	} else {
-		msg = encodeMessage(m, t.iTopic.Subject())
+
+	msg, err = t.iTopic.Encode(m)
+	if err != nil {
+		return err
 	}
 
 	if m.BeforeSend != nil {
-		asFunc := func(i interface{}) bool {
+		asFunc := func(i any) bool {
 			if nm, ok := i.(**nats.Msg); ok {
 				*nm = msg
 				return true
@@ -472,13 +485,19 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 		}
 	}
 
-	_, err = t.iTopic.PublishMessage(ctx, msg)
+	sentId, err := t.iTopic.PublishMessage(ctx, msg)
 	if err != nil {
 		return err
 	}
 
 	if m.AfterSend != nil {
-		asFunc := func(i interface{}) bool { return false }
+		asFunc := func(i any) bool {
+			if p, ok := i.(*string); ok {
+				*p = sentId
+				return true
+			}
+			return false
+		}
 		err = m.AfterSend(asFunc)
 		if err != nil {
 			return err
@@ -626,36 +645,3 @@ func (*subscription) ErrorCode(err error) gcerrors.ErrorCode {
 
 // Close implements driver.Subscription.Close.
 func (*subscription) Close() error { return nil }
-
-func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
-
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	// Always encode metadata, even if empty - this ensures consistent message format
-	if err := enc.Encode(dm.Metadata); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(dm.Body); err != nil {
-		return nil, err
-	}
-	return &nats.Msg{
-		Subject: sub,
-		Data:    buf.Bytes(),
-	}, nil
-
-}
-
-func encodeMessage(dm *driver.Message, sub string) *nats.Msg {
-	var header nats.Header
-	if dm.Metadata != nil {
-		header = nats.Header{}
-		for k, v := range dm.Metadata {
-			header[url.QueryEscape(k)] = []string{url.QueryEscape(v)}
-		}
-	}
-	return &nats.Msg{
-		Subject: sub,
-		Data:    dm.Body,
-		Header:  header,
-	}
-}
