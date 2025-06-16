@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"time"
+
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"gocloud.dev/pubsub/driver"
-	"net/url"
-	"time"
 )
 
 func NewJetstream(js jetstream.JetStream) Connection {
@@ -132,7 +133,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 	messages := make([]*driver.Message, 0, batchCount)
 
 	// Use Fetch to block for extended periods
-	// This provides better behavior when there are no messages available
+	// This provides better behaviour when there are no messages available
 	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(jc.pullWaitTimeout))
 	if err != nil {
 		return nil, err

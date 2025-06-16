@@ -20,14 +20,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/natspubsub/connections"
-	"gocloud.dev/pubsub/batcher"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/natspubsub/connections"
+	"gocloud.dev/pubsub/batcher"
 
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
@@ -914,7 +915,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 
 	receivedMessages := make(chan string, 1)
 
-	handler := func(ctx context.Context, metadata map[string]string, message []byte) error {
+	handler := func(_ context.Context, metadata map[string]string, message []byte) error {
 		msgStr := string(message)
 		t.Logf("Received message: %s", msgStr)
 		receivedMessages <- msgStr

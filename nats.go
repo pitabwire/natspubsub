@@ -31,17 +31,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
-	"gocloud.dev/gcerrors"
-	"gocloud.dev/pubsub"
-	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"gocloud.dev/gcerrors"
+	"gocloud.dev/pubsub"
+	"gocloud.dev/pubsub/driver"
 
 	"github.com/pitabwire/natspubsub/connections"
 )
@@ -86,7 +87,7 @@ var ConsumerURIParameters = []string{
 var allowedParameters []string // Start with the first slice
 
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
-var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
+var errNotSubjectInitialized = errors.New("natspubsub: subject not initialised")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
 var errNotSupportedParameter = fmt.Errorf("natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
 
@@ -354,7 +355,7 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 //	 A subscription also creates the required underlaying queue or streams
 //	 There are many more parameters checked in this case compared to the publish topic section.
 //	 If required, the list of parameters can be extended, but for now only a subset is defined and
-//	 the remaining ones utilize the sensible defaults that nats come with.
+//	 the remaining ones utilise the sensible defaults that nats come with.
 //
 //		The list of parameters includes:
 //

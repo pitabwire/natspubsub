@@ -1,0 +1,116 @@
+version: "2"
+run:
+  concurrency: 4
+  issues-exit-code: 1
+  tests: true
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+linters:
+  enable:
+    - gocyclo
+    - misspell
+    - nakedret
+    - unparam
+  disable:
+    - bodyclose
+    - depguard
+    - dupl
+    - gochecknoglobals
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gosec
+    - lll
+    - prealloc
+    - unconvert
+  settings:
+    dupl:
+      threshold: 100
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    goconst:
+      min-len: 3
+      min-occurrences: 3
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: true
+    gocyclo:
+      min-complexity: 25
+    govet:
+      enable:
+        - shadow
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+    lll:
+      line-length: 96
+      tab-width: 1
+    misspell:
+      locale: UK
+    nakedret:
+      max-func-lines: 60
+    prealloc:
+      simple: true
+      range-loops: true
+      for-loops: false
+    unparam:
+      check-exported: false
+  exclusions:
+    generated: lax
+    rules:
+      - linters:
+          - dupl
+          - errcheck
+          - gocyclo
+          - gosec
+        path: _test\.go
+      - linters:
+          - gosec
+        path: internal/hmac/
+        text: weak cryptographic primitive
+      - linters:
+          - staticcheck
+        text: 'SA9003:'
+      - linters:
+          - lll
+        source: '^//go:generate '
+    paths:
+      - .*\.md$
+      - .*\.sh$
+      - ^cmd/syncserver-integration-tests/testdata.go$
+      - bin
+      - docs
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  new: false
+formatters:
+  enable:
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: lax
+    paths:
+      - .*\.md$
+      - .*\.sh$
+      - ^cmd/syncserver-integration-tests/testdata.go$
+      - bin
+      - docs
+      - third_party$
+      - builtin$
+      - examples$

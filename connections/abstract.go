@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"time"
+
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"gocloud.dev/pubsub/batcher"
 	"gocloud.dev/pubsub/driver"
-	"regexp"
-	"strconv"
-	"time"
 )
 
 type Version struct {

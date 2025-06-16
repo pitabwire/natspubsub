@@ -6,12 +6,13 @@ import (
 	"encoding/gob"
 	"errors"
 	"fmt"
-	"github.com/nats-io/nats.go"
-	"gocloud.dev/pubsub/driver"
 	"net/url"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/nats-io/nats.go"
+	"gocloud.dev/pubsub/driver"
 )
 
 // bufferPool provides reusable byte buffers for encoding/decoding operations
@@ -271,7 +272,7 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	buf.Write(msg.Data)
 	dec := gob.NewDecoder(buf)
 
-	// Estimate initial metadata map size to minimize allocations
+	// Estimate initial metadata map size to minimise allocations
 	metadata := make(map[string]string, 8) // A reasonable starting size for most messages
 	if err := dec.Decode(&metadata); err != nil {
 		// If we can't decode as v1 format, treat the entire payload as body
