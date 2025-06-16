@@ -148,16 +148,21 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 			return messages, ctx.Err()
 		case msg, ok := <-messagesChan:
 
+			if msg != nil {
+				drvMsg, err0 := decodeJsMessage(msg)
+				if err0 != nil {
+					println("error decoding message:", err0)
+					return messages, err0
+				}
+				messages = append(messages, drvMsg)
+
+			}
+
 			if !ok {
 				// Channel closed, we've processed all messages
 				return messages, msgBatch.Error()
 			}
 
-			drvMsg, err0 := decodeJsMessage(msg)
-			if err0 != nil {
-				return messages, err0
-			}
-			messages = append(messages, drvMsg)
 		}
 	}
 }

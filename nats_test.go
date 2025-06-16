@@ -990,7 +990,6 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 				err0 = handler(ctx, msg.Metadata, msg.Body)
 				if err0 != nil {
 					msg.Nack()
-					t.Logf("we got an error from the handler : %v", err0)
 					return
 				}
 
@@ -1007,9 +1006,8 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	receivedCount := 0
 	for {
 		select {
-		case msg := <-receivedMessages:
+		case <-receivedMessages:
 			receivedCount++
-			t.Logf("Received message %d/%d: %s", receivedCount, len(messages), msg)
 			if len(messages) == receivedCount {
 				t.Log("All messages successfully received!")
 				return
