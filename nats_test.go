@@ -913,7 +913,8 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 
 	receivedMessages := make(chan string, 1)
 
-	handler := func(_ context.Context, metadata map[string]string, message []byte) error {
+	//nolint:unparam
+	handler := func(_ context.Context, _ map[string]string, message []byte) error {
 		msgStr := string(message)
 		t.Logf("Received message: %s", msgStr)
 		receivedMessages <- msgStr
