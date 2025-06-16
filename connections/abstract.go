@@ -28,6 +28,8 @@ func (v Version) V2Supported() bool {
 // TopicOptions sets options for constructing a *pubsub.Topic backed by NATS.
 type TopicOptions struct {
 	Subject string
+
+	StreamConfig jetstream.StreamConfig
 }
 
 type BatchOptions struct {

@@ -17,6 +17,8 @@ package natspubsub
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
@@ -513,7 +515,6 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	defer func(ps *pubsub.Subscription, ctx context.Context) {
 		_ = ps.Shutdown(ctx)
 	}(ps, ctx)
-
 	if _, err = js.Publish(ctx, topic2, body); err != nil {
 		t.Fatal(err)
 	}
@@ -891,6 +892,135 @@ func TestOpenSubscriptionFromURL(t *testing.T) {
 		}
 		if sub != nil {
 			_ = sub.Shutdown(ctx)
+		}
+	}
+}
+
+func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
+	ctx := context.Background()
+
+	opts := gnatsd.DefaultTestOptions
+	opts.Port = testPort
+	opts.JetStream = true
+	srv := gnatsd.RunServer(&opts)
+
+	defer srv.Shutdown()
+
+	// Create unique identifiers for this test instance
+	testID := fmt.Sprintf("%d", time.Now().UnixNano())
+	streamName := "frametest-" + testID
+	subjectName := "frametest-" + testID
+	durableName := "durableframe-" + testID
+
+	receivedMessages := make(chan string, 1)
+
+	handler := func(ctx context.Context, metadata map[string]string, message []byte) error {
+		msgStr := string(message)
+		t.Logf("Received message: %s", msgStr)
+		receivedMessages <- msgStr
+		return nil
+	}
+
+	// Configure JetStream for reliability:
+	// 1. Explicit acknowledgment - ensures messages aren't removed until explicitly acknowledged
+	// 2. Deliver policy "all" - ensures all messages are delivered
+	// 3. Workqueue retention - ensures each message is sent to only one consumer in the group
+	// 4. Memory storage - faster processing for tests
+	// 5. Higher ack wait time - gives subscriber more time to process and acknowledge
+	// 6. MaxAckPending matches message count - prevent flow control from limiting delivery
+	streamOpt := fmt.Sprintf("nats://127.0.0.1:%d?jetstream=true&stream_name=%s&stream_retention=workqueue&stream_storage=memory&stream_subjects=%s&subject=%s", testPort, streamName, subjectName, subjectName)
+	consumerOpt := fmt.Sprintf("nats://127.0.0.1:%d?consumer_ack_policy=explicit&consumer_ack_wait=10s&consumer_deliver_policy=all&consumer_durable_name=%s&consumer_filter_subject=%s&consumer_max_ack_pending=32&consumer_max_deliver=5&jetstream=true&stream_name=%s&stream_retention=workqueue&stream_storage=memory&stream_subjects=%s&subject=%s",
+		testPort, durableName, subjectName, streamName, subjectName, subjectName)
+
+	optTopic, err := pubsub.OpenTopic(ctx, streamOpt)
+	if err != nil {
+		t.Errorf("We couldn't instantiate publisher  %s", err)
+		return
+	}
+
+	optSubscriber, err := pubsub.OpenSubscription(ctx, consumerOpt)
+	if err != nil {
+		t.Errorf("We couldn't instantiate publisher  %s", err)
+		return
+	}
+
+	emptyAny, err := json.Marshal(map[string]any{})
+	if err != nil {
+		t.Errorf("We couldn't marshal empty any")
+		return
+	}
+
+	messages := [][]byte{json.RawMessage("badjson"), emptyAny}
+
+	for i := range 30 {
+		msgStr := fmt.Sprintf("{\"id\": %d}", i)
+		messages = append(messages, []byte(msgStr))
+	}
+
+	// Add a longer delay between publishes to ensure proper JetStream commit
+	for _, msg := range messages {
+		err = optTopic.Send(ctx, &pubsub.Message{
+			Body:     msg,
+			Metadata: map[string]string{},
+		})
+		if err != nil {
+			t.Errorf("We could not publish to a registered topic %v : %s ", msg, err)
+			return
+		}
+	}
+
+	// Start subscriber
+	go func(ctx context.Context, t *testing.T, handler func(context.Context, map[string]string, []byte) error) {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+
+				msg, err0 := optSubscriber.Receive(ctx)
+				if err0 != nil {
+					if errors.Is(err0, context.Canceled) || errors.Is(err0, context.DeadlineExceeded) {
+						// Context cancelled or deadline exceeded, loop again to check ctx.Done()
+						continue
+					}
+					t.Errorf("we got an error from the subscriber : %v msg : %v", ctx.Err(), msg)
+					return
+				}
+
+				err0 = handler(ctx, msg.Metadata, msg.Body)
+				if err0 != nil {
+					msg.Nack()
+					t.Logf("we got an error from the handler : %v", err0)
+					return
+				}
+
+				msg.Ack()
+
+			}
+		}
+	}(ctx, t, handler)
+
+	// Track missing messages for logging/debugging
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	receivedCount := 0
+	for {
+		select {
+		case msg := <-receivedMessages:
+			receivedCount++
+			t.Logf("Received message %d/%d: %s", receivedCount, len(messages), msg)
+			if len(messages) == receivedCount {
+				t.Log("All messages successfully received!")
+				return
+			}
+
+		case <-ctx.Done():
+			// Count final state of messages
+			return
+		case <-ticker.C:
+			t.Errorf("We did not receive all %d messages, only %d on time. Missing: %v", len(messages), receivedCount, len(messages)-receivedCount)
+			return
 		}
 	}
 }

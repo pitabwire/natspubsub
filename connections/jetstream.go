@@ -26,14 +26,28 @@ func (c *jetstreamConnection) Raw() interface{} {
 
 func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
 
+	if opts.StreamConfig.Name != "" {
+
+		stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
+		if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
+			return nil, err
+		}
+
+		if stream == nil {
+			_, err = c.jetStream.CreateStream(ctx, opts.StreamConfig)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return &jetstreamTopic{subject: opts.Subject, jetStream: c.jetStream}, nil
 }
 
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
 	stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
-	if err != nil &&
-		errors.Is(err, nats.ErrStreamNotFound) {
+	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
 		return nil, err
 	}
 
@@ -104,8 +118,6 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 }
 
 func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-	// Pre-allocate message slice with capacity of batchCount to reduce allocations
-	messages := make([]*driver.Message, 0, batchCount)
 
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
@@ -115,6 +127,9 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 	if batchCount <= 0 {
 		batchCount = 1
 	}
+
+	// Pre-allocate message slice with capacity of batchCount to reduce allocations
+	messages := make([]*driver.Message, 0, batchCount)
 
 	// Use Fetch to block for extended periods
 	// This provides better behavior when there are no messages available
@@ -132,6 +147,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		case <-ctx.Done():
 			return messages, ctx.Err()
 		case msg, ok := <-messagesChan:
+
 			if !ok {
 				// Channel closed, we've processed all messages
 				return messages, msgBatch.Error()

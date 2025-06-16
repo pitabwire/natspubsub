@@ -60,16 +60,20 @@ const (
 	StreamConfigPrefix       = "stream_"
 )
 
-var allowedParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, QueryParamSubject, QueryParamReceiveWaitTimeout,
+var defaultURIParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, QueryParamSubject, QueryParamReceiveWaitTimeout}
+var BatchReceiveURIParameters = []string{
 	"receive_batch_max_handlers", "receive_batch_min_batch_size", "receive_batch_max_batch_size", "receive_batch_max_batch_byte_size",
-	"ack_batch_max_handlers", "ack_batch_min_batch_size", "ack_batch_max_batch_size", "ack_batch_max_batch_byte_size",
-	"stream_name", "stream_description", "stream_subjects", "stream_retention", "stream_max_consumers",
+}
+var BatchAckURIParameters = []string{"ack_batch_max_handlers", "ack_batch_min_batch_size", "ack_batch_max_batch_size", "ack_batch_max_batch_byte_size"}
+var StreamURIParameters = []string{"stream_name", "stream_description", "stream_subjects", "stream_retention", "stream_max_consumers",
 	"stream_max_msgs", "stream_max_bytes", "stream_discard", "stream_discard_new_per_subject", "stream_max_age",
 	"stream_max_msgs_per_subject", "stream_max_msg_size", "stream_storage", "stream_num_replicas", "stream_no_ack",
 	"stream_duplicate_window", "stream_placement", "stream_mirror", "stream_sources", "stream_sealed",
 	"stream_deny_delete", "stream_deny_purge", "stream_allow_rollup_hdrs", "stream_compression", "stream_first_seq",
 	"stream_subject_transform", "stream_republish", "stream_allow_direct", "stream_mirror_direct", "stream_consumer_limits",
 	"stream_metadata", "stream_template_owner", "stream_allow_msg_ttl", "stream_subject_delete_marker_ttl",
+}
+var ConsumerURIParameters = []string{
 	"consumer_name", "consumer_durable_name", "consumer_description", "consumer_deliver_policy",
 	"consumer_opt_start_seq", "consumer_opt_start_time", "consumer_ack_policy", "consumer_ack_wait",
 	"consumer_max_deliver", "consumer_backoff", "consumer_filter_subject", "consumer_replay_policy",
@@ -77,16 +81,26 @@ var allowedParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, 
 	"consumer_headers_only", "consumer_max_batch", "consumer_max_expires", "consumer_max_bytes",
 	"consumer_inactive_threshold", "consumer_num_replicas", "consumer_mem_storage", "consumer_filter_subjects",
 	"consumer_metadata", "consumer_pause_until", "consumer_priority_policy", "consumer_priority_timeout",
-	"consumer_priority_groups"}
+	"consumer_priority_groups",
+}
+var allowedParameters []string // Start with the first slice
+
 var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotSubjectInitialized = errors.New("natspubsub: subject not initialized")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
 var errNotSupportedParameter = fmt.Errorf("natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
 
 func init() {
+
 	o := new(defaultDialer)
 	pubsub.DefaultURLMux().RegisterTopic(Scheme, o)
 	pubsub.DefaultURLMux().RegisterSubscription(Scheme, o)
+
+	allowedParameters = append(allowedParameters, defaultURIParameters...)
+	allowedParameters = append(allowedParameters, BatchReceiveURIParameters...)
+	allowedParameters = append(allowedParameters, BatchAckURIParameters...)
+	allowedParameters = append(allowedParameters, StreamURIParameters...)
+	allowedParameters = append(allowedParameters, ConsumerURIParameters...)
 }
 
 // defaultDialer dials a NATS server based on the provided url
@@ -307,8 +321,32 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 		return nil, err
 	}
 
-	return OpenTopic(ctx, o.Connection, opts)
+	queryParams := u.Query()
 
+	streamMap := make(map[string]any)
+	for key, values := range queryParams {
+		// Use the first value if multiple values exist for a key
+		if len(values) == 0 {
+			continue
+		}
+
+		configVal := values[0]
+		if strings.HasPrefix(key, StreamConfigPrefix) {
+			streamMap[strings.TrimPrefix(key, StreamConfigPrefix)] = cleanSettingValue(strings.TrimPrefix(key, StreamConfigPrefix), configVal)
+		}
+	}
+
+	jsonData, err := json.Marshal(streamMap)
+	if err != nil {
+		return nil, err
+	}
+
+	err = json.Unmarshal(jsonData, &opts.StreamConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return OpenTopic(ctx, o.Connection, opts)
 }
 
 // OpenSubscriptionURL opens a pubsub.Subscription based on url supplied.
