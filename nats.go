@@ -40,11 +40,10 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
 	"gocloud.dev/pubsub/driver"
-
-	"github.com/pitabwire/natspubsub/connections"
 )
 
 const (

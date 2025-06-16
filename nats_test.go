@@ -26,18 +26,16 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nats-io/nats.go/jetstream"
-	"github.com/pitabwire/natspubsub/connections"
-	"gocloud.dev/pubsub/batcher"
-
-	"gocloud.dev/gcerrors"
-	"gocloud.dev/pubsub"
-	"gocloud.dev/pubsub/driver"
-	"gocloud.dev/pubsub/drivertest"
-
 	"github.com/nats-io/nats-server/v2/server"
 	gnatsd "github.com/nats-io/nats-server/v2/test"
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/natspubsub/connections"
+	"gocloud.dev/gcerrors"
+	"gocloud.dev/pubsub"
+	"gocloud.dev/pubsub/batcher"
+	"gocloud.dev/pubsub/driver"
+	"gocloud.dev/pubsub/drivertest"
 )
 
 const (
