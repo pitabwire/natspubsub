@@ -7,7 +7,7 @@ FILES		?= $(shell find . -type f -name '*.go' -not -path "./vendor/*")
 
 
 
-default: help
+default: format build
 
 help:   ## show this help
 	@echo 'usage: make [target] ...'
@@ -27,9 +27,11 @@ vet:    ## run go vet on the source files
 doc:    ## generate godocs and start a local documentation webserver on port 8085
 	godoc -http=:8085 -index
 
-goimports:
-	find . -name '*.go' -not -path './vendor/*' -not -path './.git/*' -exec sed -i '/^import (/,/^)/{/^$$/d}' {} +
-	find . -name '*.go' -not -path './vendor/*' -not -path './.git/*' -exec goimports -w {} +
+
+format:
+	find . -name '*.go' -not -path './.git/*' -exec sed -i '/^import (/,/^)/{/^$$/d}' {} +
+	find . -name '*.go' -not -path './.git/*' -exec goimports -w {} +
+	golangci-lint run --fix
 
 # this command will run all tests in the repo
 # INTEGRATION_TEST_SUITE_PATH is used to run specific tests in Golang,

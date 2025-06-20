@@ -966,7 +966,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	}
 
 	// Start subscriber
-	go func(ctx context.Context, t *testing.T, handler func(context.Context, map[string]string, []byte) error) {
+	go func(ctx context.Context, handler func(context.Context, map[string]string, []byte) error) {
 		for {
 			select {
 			case <-ctx.Done():
@@ -992,7 +992,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 
 			}
 		}
-	}(ctx, t, handler)
+	}(ctx, handler)
 
 	// Track missing messages for logging/debugging
 	ticker := time.NewTicker(2 * time.Second)
@@ -1078,7 +1078,7 @@ func TestService_SubjectExtension(t *testing.T) {
 	}
 
 	// Start subscriber
-	go func(ctx context.Context, t *testing.T, handler func(context.Context, map[string]string, []byte) error) {
+	go func(ctx context.Context, handler func(context.Context, map[string]string, []byte) error) {
 		for {
 			select {
 			case <-ctx.Done():
@@ -1104,7 +1104,7 @@ func TestService_SubjectExtension(t *testing.T) {
 
 			}
 		}
-	}(ctx, t, handler)
+	}(ctx, handler)
 
 	// Track missing messages for logging/debugging
 	ticker := time.NewTicker(2 * time.Second)
@@ -1115,7 +1115,7 @@ func TestService_SubjectExtension(t *testing.T) {
 		select {
 		case <-receivedMessages:
 			receivedCount++
-			if 30 == receivedCount {
+			if receivedCount == 30 {
 				t.Log("All messages successfully received!")
 				return
 			}
