@@ -30,6 +30,8 @@ func (v Version) V2Supported() bool {
 type TopicOptions struct {
 	Subject string
 
+	HeaderExtendingSubject string
+
 	StreamConfig jetstream.StreamConfig
 }
 
@@ -87,12 +89,14 @@ type Queue interface {
 	Ack(ctx context.Context, ids []driver.AckID) error
 	Nack(ctx context.Context, ids []driver.AckID) error
 	IsQueueGroup() bool
+	Close() error
 }
 
 type Topic interface {
 	Encode(dm *driver.Message) (*nats.Msg, error)
 	Subject() string
 	PublishMessage(ctx context.Context, msg *nats.Msg) (string, error)
+	Close() error
 }
 
 type Connection interface {
@@ -100,6 +104,7 @@ type Connection interface {
 	CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error)
 	CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error)
 	DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error
+	Close() error
 }
 
 var semVerRegexp = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
@@ -126,4 +131,16 @@ func ServerVersion(version string) (*Version, error) {
 		return nil, fmt.Errorf("failed to parse server version patch number %q: %v", m[3], err)
 	}
 	return &Version{Major: major, Minor: minor, Patch: patch}, nil
+}
+
+func subjectExtension(extendingHeader string, headers map[string]string) string {
+	if extendingHeader == "" || headers == nil {
+		return ""
+	}
+
+	extension, ok := headers[extendingHeader]
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf(".%s", extension)
 }

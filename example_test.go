@@ -19,7 +19,6 @@ import (
 	"log"
 
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub"
 	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/pubsub"
@@ -63,12 +62,10 @@ func ExampleOpenTopic() {
 	}
 	defer natsConn.Close()
 
-	js, err := jetstream.New(natsConn)
+	conn, err := connections.NewJetstream(natsConn)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	conn := connections.NewJetstream(js)
 
 	topic, err := natspubsub.OpenTopic(ctx, conn, &connections.TopicOptions{Subject: "example.mysubject"})
 	if err != nil {

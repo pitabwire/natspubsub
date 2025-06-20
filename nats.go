@@ -39,7 +39,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/connections"
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
@@ -50,9 +49,10 @@ const (
 	QueryParameterNatsV1    = "nats_v1"
 	QueryParameterJetstream = "jetstream"
 
-	QueryParamSubject            = "subject"
-	QueryParamReceiveWaitTimeout = "receive_wait_timeout"
-	DefaultReceiveWaitTimeout    = 30 * time.Second
+	QueryParamSubject               = "subject"
+	QueryParamHeaderToExtendSubject = "header_to_extended_subject"
+	QueryParamReceiveWaitTimeout    = "receive_wait_timeout"
+	DefaultReceiveWaitTimeout       = 30 * time.Second
 
 	ReceiveBatchConfigPrefix = "receive_batch_"
 	AckBatchConfigPrefix     = "ack_batch_"
@@ -60,7 +60,7 @@ const (
 	StreamConfigPrefix       = "stream_"
 )
 
-var defaultURIParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, QueryParamSubject, QueryParamReceiveWaitTimeout}
+var defaultURIParameters = []string{QueryParameterNatsV1, QueryParameterJetstream, QueryParamSubject, QueryParamHeaderToExtendSubject, QueryParamReceiveWaitTimeout}
 var BatchReceiveURIParameters = []string{
 	"receive_batch_max_handlers", "receive_batch_min_batch_size", "receive_batch_max_batch_size", "receive_batch_max_batch_byte_size",
 }
@@ -168,19 +168,11 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnable
 		return nil, fmt.Errorf("natspubsub: failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
 	}
 
-	var conn connections.Connection
 	if !sv.JetstreamSupported() || !isJetstreamEnabled {
 		return connections.NewPlainWithEncodingV1(natsConn, useV1Encoding)
 	}
 
-	var js jetstream.JetStream
-	js, err = jetstream.New(natsConn)
-	if err != nil {
-		return nil, fmt.Errorf("natspubsub: failed to convert server to jetstream : %v", err)
-	}
-
-	conn = connections.NewJetstream(js)
-	return conn, nil
+	return connections.NewJetstream(natsConn)
 
 }
 
@@ -322,6 +314,8 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 	}
 
 	queryParams := u.Query()
+
+	opts.HeaderExtendingSubject = queryParams.Get(QueryParamHeaderToExtendSubject)
 
 	streamMap := make(map[string]any)
 	for key, values := range queryParams {
@@ -545,7 +539,7 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 }
 
 // IsRetryable implements driver.Connection.IsRetryable.
-func (*topic) IsRetryable(error) bool { return false }
+func (t *topic) IsRetryable(error) bool { return false }
 
 // As implements driver.Connection.As.
 func (t *topic) As(i interface{}) bool {
@@ -558,12 +552,12 @@ func (t *topic) As(i interface{}) bool {
 }
 
 // ErrorAs implements driver.Connection.ErrorAs
-func (*topic) ErrorAs(error, interface{}) bool {
+func (t *topic) ErrorAs(error, interface{}) bool {
 	return false
 }
 
 // ErrorCode implements driver.Connection.ErrorCode
-func (*topic) ErrorCode(err error) gcerrors.ErrorCode {
+func (t *topic) ErrorCode(err error) gcerrors.ErrorCode {
 	switch {
 	case err == nil:
 		return gcerrors.OK
@@ -582,7 +576,12 @@ func (*topic) ErrorCode(err error) gcerrors.ErrorCode {
 }
 
 // Close implements driver.Connection.Close.
-func (*topic) Close() error { return nil }
+func (t *topic) Close() error {
+	if t == nil || t.iTopic == nil {
+		return nil
+	}
+	return t.iTopic.Close()
+}
 
 type subscription struct {
 	queue connections.Queue
@@ -682,4 +681,9 @@ func (*subscription) ErrorCode(err error) gcerrors.ErrorCode {
 }
 
 // Close implements driver.Subscription.Close.
-func (*subscription) Close() error { return nil }
+func (s *subscription) Close() error {
+	if s == nil || s.queue == nil {
+		return nil
+	}
+	return s.queue.Close()
+}

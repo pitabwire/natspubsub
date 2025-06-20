@@ -46,6 +46,14 @@ type plainConnection struct {
 	version        *Version
 }
 
+func (c *plainConnection) Close() error {
+	if c.natsConnection == nil {
+		return nil
+	}
+
+	return c.natsConnection.Drain()
+}
+
 func (c *plainConnection) Raw() interface{} {
 	return c.natsConnection
 }
@@ -53,12 +61,12 @@ func (c *plainConnection) Raw() interface{} {
 func (c *plainConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
 
 	useV1Encoding := !c.version.V2Supported() || c.useV1Encoding
-	return &plainNatsTopic{subject: opts.Subject, plainConn: c.natsConnection, useV1Encoding: useV1Encoding}, nil
+	return &plainNatsTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, plainConn: c.natsConnection, useV1Encoding: useV1Encoding}, nil
 }
 
 func (c *plainConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
 
-	//We force the batch fetch size to 1, as only jetstream enabled connections can do batch fetches
+	// We force the batch fetch size to 1, as only jetstream enabled connections can do batch fetches
 	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
 	opts.ConsumerConfig.MaxRequestBatch = 1
 
@@ -96,9 +104,16 @@ func (c *plainConnection) DeleteSubscription(ctx context.Context, opts *Subscrip
 }
 
 type plainNatsTopic struct {
-	subject       string
-	plainConn     *nats.Conn
-	useV1Encoding bool
+	subject          string
+	subjectExtHeader string
+	plainConn        *nats.Conn
+	useV1Encoding    bool
+}
+
+func (t *plainNatsTopic) Close() error {
+	// Nothing specific to close for plainNatsTopic
+	// The underlying NATS connection is managed by the plainConnection
+	return nil
 }
 
 func (t *plainNatsTopic) UseV1Encoding() bool {
@@ -106,10 +121,16 @@ func (t *plainNatsTopic) UseV1Encoding() bool {
 }
 
 func (t *plainNatsTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
-	if t.useV1Encoding {
-		return encodeV1Message(dm, t.Subject())
+
+	subject := t.Subject()
+	if t.subjectExtHeader != "" {
+		subject = subject + subjectExtension(t.subjectExtHeader, dm.Metadata)
 	}
-	return encodeMessage(dm, t.Subject())
+
+	if t.useV1Encoding {
+		return encodeV1Message(dm, subject)
+	}
+	return encodeMessage(dm, subject)
 }
 func (t *plainNatsTopic) Subject() string {
 	return t.subject
@@ -129,6 +150,10 @@ type natsConsumer struct {
 	isQueueGroup      bool
 	batchFetchTimeout time.Duration
 	useV1Decoding     bool
+}
+
+func (q *natsConsumer) Close() error {
+	return q.consumer.Drain()
 }
 
 func (q *natsConsumer) UseV1Decoding() bool {

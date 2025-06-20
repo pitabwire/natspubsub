@@ -12,13 +12,27 @@ import (
 	"gocloud.dev/pubsub/driver"
 )
 
-func NewJetstream(js jetstream.JetStream) Connection {
-	return &jetstreamConnection{jetStream: js}
+func NewJetstream(natsConn *nats.Conn) (Connection, error) {
+
+	js, err := jetstream.New(natsConn)
+	if err != nil {
+		return nil, fmt.Errorf("natspubsub: failed to convert connection to jetstream : %v", err)
+	}
+
+	return &jetstreamConnection{jetStream: js}, nil
 }
 
 type jetstreamConnection struct {
 	// Connection to use for communication with the server.
 	jetStream jetstream.JetStream
+}
+
+func (c *jetstreamConnection) Close() error {
+	conn := c.jetStream.Conn()
+	if conn == nil {
+		return nil
+	}
+	return conn.Drain()
 }
 
 func (c *jetstreamConnection) Raw() interface{} {
@@ -35,14 +49,14 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 		}
 
 		if stream == nil {
-			_, err = c.jetStream.CreateStream(ctx, opts.StreamConfig)
+			_, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
 
-	return &jetstreamTopic{subject: opts.Subject, jetStream: c.jetStream}, nil
+	return &jetstreamTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, jetStream: c.jetStream}, nil
 }
 
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
@@ -53,7 +67,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 	}
 
 	if stream == nil {
-		stream, err = c.jetStream.CreateStream(ctx, opts.StreamConfig)
+		stream, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
 		if err != nil {
 			return nil, err
 		}
@@ -80,12 +94,23 @@ func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *Subs
 }
 
 type jetstreamTopic struct {
-	subject   string
-	jetStream jetstream.JetStream
+	subject          string
+	subjectExtHeader string
+	jetStream        jetstream.JetStream
+}
+
+func (t *jetstreamTopic) Close() error {
+	// Nothing to close for the jetstreamTopic as the underlying JetStream connection
+	// is managed by the jetstreamConnection and should be closed there
+	return nil
 }
 
 func (t *jetstreamTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
-	return encodeMessage(dm, t.Subject())
+	subject := t.Subject()
+	if t.subjectExtHeader != "" {
+		subject = subject + subjectExtension(t.subjectExtHeader, dm.Metadata)
+	}
+	return encodeMessage(dm, subject)
 }
 func (t *jetstreamTopic) Subject() string {
 	return t.subject
@@ -104,6 +129,16 @@ type jetstreamConsumer struct {
 	consumer        jetstream.Consumer
 	pullWaitTimeout time.Duration
 	isQueueGroup    bool
+}
+
+func (jc *jetstreamConsumer) Close() error {
+	// We don't have direct access to close the consumer since the consumer is managed by
+	// the stream. Instead, we should make sure all pending messages have been properly
+	// acknowledged before closing.
+
+	// Return nil as the actual consumer lifetime is managed by the JetStream server
+	// and its configuration (TTL, interest, etc.)
+	return nil
 }
 
 func (jc *jetstreamConsumer) UseV1Decoding() bool {
