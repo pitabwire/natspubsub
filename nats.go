@@ -14,7 +14,7 @@
 
 //
 // natspubsub exposes the following types for use:
-//   - Connection: *nats.Conn
+//   - Conn: *nats.Conn
 //   - Subscription: *nats.Subscription
 //   - Message.BeforeSend: *nats.Msg for v2.
 //   - Message.AfterSend: None.
@@ -31,11 +31,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nats-io/nats.go/jetstream"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -135,7 +137,9 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 
 	storedOpener, ok := o.openerMap.Load(connectionUrl)
 	if ok {
-		return storedOpener.(*URLOpener), nil
+		opener := storedOpener.(*URLOpener)
+		opener.ConfirmOpen()
+		return opener, nil
 	}
 
 	useV1Encoding := o.featureIsEnabledViaUrl(serverUrl.Query(), QueryParameterNatsV1)
@@ -147,10 +151,16 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 	}
 
 	opener := &URLOpener{
-		Connection:          conn,
+		Conn:                conn,
 		TopicOptions:        connections.TopicOptions{},
 		SubscriptionOptions: connections.SubscriptionOptions{},
+		refCount:            &atomic.Int32{},
+		dialer:              o,
+		connectionURL:       connectionUrl,
 	}
+
+	// Initialize reference count to 1
+	opener.refCount.Store(1)
 
 	o.openerMap.Store(connectionUrl, opener)
 
@@ -168,12 +178,19 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnable
 		return nil, fmt.Errorf("natspubsub: failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
 	}
 
+	var conn connections.Connection
+
 	if !sv.JetstreamSupported() || !isJetstreamEnabled {
-		return connections.NewPlainWithEncodingV1(natsConn, useV1Encoding)
+		conn, err = connections.NewPlainWithEncodingV1(natsConn, useV1Encoding)
+	} else {
+		conn, err = connections.NewJetstream(natsConn)
 	}
 
-	return connections.NewJetstream(natsConn)
+	if err != nil {
+		return nil, err
+	}
 
+	return conn, nil
 }
 
 func (o *defaultDialer) featureIsEnabledViaUrl(q url.Values, key string) bool {
@@ -219,6 +236,63 @@ func (o *defaultDialer) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*p
 	return opener.OpenSubscriptionURL(ctx, u)
 }
 
+// cleanupOpener properly cleans up and removes an opener from the openerMap
+func (o *defaultDialer) cleanupOpener(connectionURL string) error {
+
+	val, ok := o.openerMap.Load(connectionURL)
+	if !ok {
+		return nil
+	}
+
+	opener, ok := val.(*URLOpener)
+	if !ok {
+		return nil
+	}
+
+	// Get the raw connection
+	var natsConn *nats.Conn
+
+	// Extract the underlying NATS connection based on the type
+	if conn := opener.Connection().Raw(); conn != nil {
+		switch v := conn.(type) {
+		case *nats.Conn:
+			natsConn = v
+		case jetstream.JetStream:
+			natsConn = v.Conn()
+		}
+	}
+
+	var err error
+	// Drain the connection if we have one
+	if natsConn != nil {
+		err = natsConn.Drain() // Ignoring errors during cleanup
+	}
+
+	// Remove from the map
+	o.openerMap.Delete(connectionURL)
+	return err
+}
+
+// closeAllConnections drains and removes all connections in the openerMap
+func (o *defaultDialer) closeAllConnections() error {
+
+	var finalError []error
+
+	o.openerMap.Range(func(key, _ any) bool {
+		connectionUrl := key.(string)
+		err := o.cleanupOpener(connectionUrl)
+		if err != nil {
+			finalError = append(finalError, err)
+		}
+		return true
+	})
+
+	if len(finalError) > 0 {
+		return errors.Join(finalError...)
+	}
+	return nil
+}
+
 // Scheme is the URL scheme natspubsub registers its URLOpeners under on pubsub.DefaultMux.
 const Scheme = "nats"
 
@@ -228,11 +302,35 @@ const Scheme = "nats"
 //
 // No query parameters are supported.
 type URLOpener struct {
-	Connection connections.Connection
+	Conn connections.Connection
 	// TopicOptions specifies the options to pass to OpenTopic.
 	TopicOptions connections.TopicOptions
 	// SubscriptionOptions specifies the options to pass to OpenSubscription.
 	SubscriptionOptions connections.SubscriptionOptions
+
+	// Reference counting with atomic operations
+	refCount      *atomic.Int32
+	dialer        *defaultDialer
+	connectionURL string
+}
+
+// Connection increments the reference count of topics and subscriptions opened
+func (o *URLOpener) Connection() connections.Connection {
+	return o.Conn
+}
+
+// ConfirmOpen increments the reference count of topics and subscriptions opened
+func (o *URLOpener) ConfirmOpen() int32 {
+	return o.refCount.Add(1)
+}
+
+// ConfirmClose decrements the reference count and returns the new count
+func (o *URLOpener) ConfirmClose() error {
+	activeCount := o.refCount.Add(-1)
+	if activeCount <= 0 {
+		return o.dialer.cleanupOpener(o.connectionURL)
+	}
+	return nil
 }
 
 func cleanSubjectFromUrl(u *url.URL) (string, error) {
@@ -340,7 +438,7 @@ func (o *URLOpener) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic
 		return nil, err
 	}
 
-	return OpenTopic(ctx, o.Connection, opts)
+	return OpenTopic(ctx, o, opts)
 }
 
 // OpenSubscriptionURL opens a pubsub.Subscription based on url supplied.
@@ -436,7 +534,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 		return nil, err
 	}
 
-	return OpenSubscription(ctx, o.Connection, opts)
+	return OpenSubscription(ctx, o, opts)
 
 }
 
@@ -444,14 +542,14 @@ type topic struct {
 	iTopic connections.Topic
 }
 
-// OpenTopic returns a *pubsub.Topic for use with NATS at least version 2.2.0.
+// OpenTopic returns a *pubsub.Topic for use with NATS, version 2.2.0 and above is recommended.
 // This changes the encoding of the message as, starting with version 2.2.0, NATS supports message headers.
 // In previous versions the message headers were encoded along with the message content using gob.Encoder,
 // which limits the subscribers only to Go clients.
 // This implementation uses native NATS message headers, and native message content, which provides full support
 // for non-Go clients.
-func OpenTopic(ctx context.Context, conn connections.Connection, opts *connections.TopicOptions) (*pubsub.Topic, error) {
-	dt, err := openTopic(ctx, conn, opts)
+func OpenTopic(ctx context.Context, connector connections.Connector, opts *connections.TopicOptions) (*pubsub.Topic, error) {
+	dt, err := openTopic(ctx, connector, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -460,20 +558,18 @@ func OpenTopic(ctx context.Context, conn connections.Connection, opts *connectio
 
 // openTopic returns the driver for OpenTopic. This function exists so the test
 // harness can get the driver interface implementation if it needs to.
-func openTopic(ctx context.Context, conn connections.Connection, opts *connections.TopicOptions) (driver.Topic, error) {
-	if conn == nil {
-		return nil, errInvalidUrl
-	}
+func openTopic(ctx context.Context, connector connections.Connector, opts *connections.TopicOptions) (driver.Topic, error) {
 
-	itopic, err := conn.CreateTopic(ctx, opts)
+	conn := connector.Connection()
+	t, err := conn.CreateTopic(ctx, opts, connector)
 	if err != nil {
 		return nil, err
 	}
 
-	return &topic{iTopic: itopic}, nil
+	return &topic{iTopic: t}, nil
 }
 
-// SendBatch implements driver.Connection.SendBatch.
+// SendBatch implements driver.Conn.SendBatch.
 func (t *topic) SendBatch(ctx context.Context, msgs []*driver.Message) error {
 	if t == nil || t.iTopic == nil {
 		return errNotSubjectInitialized
@@ -538,10 +634,10 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 	return nil
 }
 
-// IsRetryable implements driver.Connection.IsRetryable.
+// IsRetryable implements driver.Conn.IsRetryable.
 func (t *topic) IsRetryable(error) bool { return false }
 
-// As implements driver.Connection.As.
+// As implements driver.Conn.As.
 func (t *topic) As(i interface{}) bool {
 	c, ok := i.(*connections.Topic)
 	if !ok {
@@ -551,12 +647,12 @@ func (t *topic) As(i interface{}) bool {
 	return true
 }
 
-// ErrorAs implements driver.Connection.ErrorAs
+// ErrorAs implements driver.Conn.ErrorAs
 func (t *topic) ErrorAs(error, interface{}) bool {
 	return false
 }
 
-// ErrorCode implements driver.Connection.ErrorCode
+// ErrorCode implements driver.Conn.ErrorCode
 func (t *topic) ErrorCode(err error) gcerrors.ErrorCode {
 	switch {
 	case err == nil:
@@ -575,16 +671,19 @@ func (t *topic) ErrorCode(err error) gcerrors.ErrorCode {
 	return gcerrors.Unknown
 }
 
-// Close implements driver.Connection.Close.
+// Close implements driver.Conn.Close.
 func (t *topic) Close() error {
 	if t == nil || t.iTopic == nil {
 		return nil
 	}
+	// First close the actual topic
 	return t.iTopic.Close()
 }
 
 type subscription struct {
-	queue connections.Queue
+	queue  connections.Queue
+	opener *URLOpener
+	url    string
 }
 
 // OpenSubscription returns a *pubsub.Subscription representing a NATS subscription
@@ -594,8 +693,8 @@ type subscription struct {
 // which limits the subscribers only to Go clients.
 // This implementation uses native NATS message headers, and native message content, which provides full support
 // for non-Go clients.
-func OpenSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (*pubsub.Subscription, error) {
-	ds, err := openSubscription(ctx, conn, opts)
+func OpenSubscription(ctx context.Context, connector connections.Connector, opts *connections.SubscriptionOptions) (*pubsub.Subscription, error) {
+	ds, err := openSubscription(ctx, connector, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -603,16 +702,28 @@ func OpenSubscription(ctx context.Context, conn connections.Connection, opts *co
 	return pubsub.NewSubscription(ds, opts.ReceiveBatchConfig.To(), opts.AckBatchConfig.To()), nil
 }
 
-func openSubscription(ctx context.Context, conn connections.Connection, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
+func openSubscription(ctx context.Context, connector connections.Connector, opts *connections.SubscriptionOptions) (driver.Subscription, error) {
 	if opts == nil {
 		return nil, errors.New("natspubsub: subscription options missing")
 	}
 
-	queue, err := conn.CreateSubscription(ctx, opts)
+	conn := connector.Connection()
+
+	q, err := conn.CreateSubscription(ctx, opts, connector)
 	if err != nil {
 		return nil, err
 	}
-	return &subscription{queue: queue}, nil
+
+	// Get URL and opener from conn if possible
+	var opener *URLOpener
+	var url string
+
+	// Try to extract the opener from the connection context if available
+	if conn, ok := conn.(interface{ GetOpenerInfo() (*URLOpener, string) }); ok {
+		opener, url = conn.GetOpenerInfo()
+	}
+
+	return &subscription{queue: q, opener: opener, url: url}, nil
 }
 
 // ReceiveBatch implements driver.ReceiveBatch.
@@ -685,5 +796,6 @@ func (s *subscription) Close() error {
 	if s == nil || s.queue == nil {
 		return nil
 	}
+	// First close the actual subscription
 	return s.queue.Close()
 }

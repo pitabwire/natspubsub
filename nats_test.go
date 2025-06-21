@@ -103,6 +103,17 @@ type harness struct {
 	conn connections.Connection
 }
 
+func (h *harness) Connection() connections.Connection {
+	return h.conn
+}
+
+func (h *harness) ConfirmClose() error {
+	return nil
+}
+func (h *harness) ConfirmOpen() int32 {
+	return int32(0)
+}
+
 func (h *harness) CreateTopic(ctx context.Context, testName string) (driver.Topic, func(), error) {
 	cleanup := func() {}
 
@@ -110,7 +121,7 @@ func (h *harness) CreateTopic(ctx context.Context, testName string) (driver.Topi
 
 	pOpts := &connections.TopicOptions{Subject: subject}
 
-	dt, err := openTopic(ctx, h.conn, pOpts)
+	dt, err := openTopic(ctx, h, pOpts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -176,7 +187,7 @@ func (h *harness) CreateSubscription(ctx context.Context, dt driver.Topic, testN
 	dt.As(&tp)
 
 	opts := defaultSubOptions(tp.Subject(), testName)
-	ds, err := openSubscription(ctx, h.conn, opts)
+	ds, err := openSubscription(ctx, h, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -193,7 +204,7 @@ func (h *harness) CreateQueueSubscription(ctx context.Context, dt driver.Topic, 
 
 	opts := defaultSubOptions(tp.Subject(), testName)
 
-	ds, err := openSubscription(ctx, h.conn, opts)
+	ds, err := openSubscription(ctx, h, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -374,14 +385,15 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dh.Close()
-	conn := dh.(*harness).conn
+
+	h := dh.(*harness)
 
 	const topic = "foo"
 	md := map[string]string{"a": "1", "b": "2", "c": "3"}
 	body := []byte("hello")
 
 	// Send a message using Go CDK and receive it using NATS directly.
-	pt, err := OpenTopic(ctx, conn, &connections.TopicOptions{Subject: topic})
+	pt, err := OpenTopic(ctx, h, &connections.TopicOptions{Subject: topic})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +401,7 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 		_ = pt.Shutdown(ctx)
 	}(pt, ctx)
 
-	natsConn := conn.Raw().(*nats.Conn)
+	natsConn := h.Connection().Raw().(*nats.Conn)
 
 	nsub, _ := natsConn.SubscribeSync(topic)
 	if err = pt.Send(ctx, &pubsub.Message{Body: body, Metadata: md}); err != nil {
@@ -412,7 +424,7 @@ func TestPlainInteropWithDirectNATS(t *testing.T) {
 	// Send a message using NATS directly and receive it using Go CDK.
 	opts := defaultSubOptions(topic, t.Name())
 
-	ps, err := OpenSubscription(ctx, conn, opts)
+	ps, err := OpenSubscription(ctx, h, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +451,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer dh.Close()
-	conn := dh.(*harness).conn
+	h := dh.(*harness)
 
 	const topic = "foo"
 	const topic2 = "flow"
@@ -447,7 +459,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	body := []byte("hello")
 
 	// Send a message using Go CDK and receive it using NATS directly.
-	pt, err := OpenTopic(ctx, conn, &connections.TopicOptions{Subject: topic})
+	pt, err := OpenTopic(ctx, h, &connections.TopicOptions{Subject: topic})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +467,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 		_ = pt.Shutdown(ctx)
 	}(pt, ctx)
 
-	js := conn.Raw().(jetstream.JetStream)
+	js := h.Connection().Raw().(jetstream.JetStream)
 
 	stream, err := js.Stream(ctx, topic)
 	if err != nil && !strings.Contains(err.Error(), "404") {
@@ -506,7 +518,7 @@ func TestJetstreamInteropWithDirectNATS(t *testing.T) {
 	// Send a message using NATS directly and receive it using Go CDK.
 	opts := defaultSubOptions(topic2, fmt.Sprintf("2_%s", t.Name()))
 
-	ps, err := OpenSubscription(ctx, conn, opts)
+	ps, err := OpenSubscription(ctx, h, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +548,7 @@ func TestErrorCode(t *testing.T) {
 	h := dh.(*harness)
 
 	// Topics
-	dt, err := openTopic(ctx, h.conn, &connections.TopicOptions{Subject: "bar"})
+	dt, err := openTopic(ctx, h, &connections.TopicOptions{Subject: "bar"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -563,7 +575,7 @@ func TestErrorCode(t *testing.T) {
 	// Subscriptions
 	opts := defaultSubOptions("bar", t.Name())
 
-	ds, err := openSubscription(ctx, h.conn, opts)
+	ds, err := openSubscription(ctx, h, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -598,7 +610,7 @@ func TestErrorCode(t *testing.T) {
 	// Queue Subscription
 	opts = defaultSubOptions("bar", t.Name())
 
-	qs, err := openSubscription(ctx, h.conn, opts)
+	qs, err := openSubscription(ctx, h, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

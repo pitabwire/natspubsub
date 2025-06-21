@@ -28,18 +28,16 @@ type jetstreamConnection struct {
 }
 
 func (c *jetstreamConnection) Close() error {
-	conn := c.jetStream.Conn()
-	if conn == nil {
-		return nil
-	}
-	return conn.Drain()
+	// Don't drain the underlying connection as it may be used by other components
+	// The jetstream context itself doesn't need explicit cleanup
+	return nil
 }
 
 func (c *jetstreamConnection) Raw() interface{} {
 	return c.jetStream
 }
 
-func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
+func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOptions, connector Connector) (Topic, error) {
 
 	if opts.StreamConfig.Name != "" {
 
@@ -56,10 +54,10 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 		}
 	}
 
-	return &jetstreamTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, jetStream: c.jetStream}, nil
+	return &jetstreamTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, jetStream: c.jetStream, connector: connector}, nil
 }
 
-func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
+func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions, connector Connector) (Queue, error) {
 
 	stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
 	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
@@ -81,7 +79,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		return nil, err
 	}
 
-	return &jetstreamConsumer{consumer: consumer, pullWaitTimeout: opts.ReceiveWaitTimeOut, isQueueGroup: isDurableQueue}, nil
+	return &jetstreamConsumer{consumer: consumer, pullWaitTimeout: opts.ReceiveWaitTimeOut, isQueueGroup: isDurableQueue, connector: connector}, nil
 
 }
 
@@ -97,12 +95,17 @@ type jetstreamTopic struct {
 	subject          string
 	subjectExtHeader string
 	jetStream        jetstream.JetStream
+	connector        Connector
 }
 
 func (t *jetstreamTopic) Close() error {
 	// Nothing to close for the jetstreamTopic as the underlying JetStream connection
 	// is managed by the jetstreamConnection and should be closed there
-	return nil
+	if t == nil || t.connector == nil {
+		return nil
+	}
+
+	return t.connector.ConfirmClose()
 }
 
 func (t *jetstreamTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
@@ -126,6 +129,8 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 }
 
 type jetstreamConsumer struct {
+	connector Connector
+
 	consumer        jetstream.Consumer
 	pullWaitTimeout time.Duration
 	isQueueGroup    bool
@@ -138,7 +143,10 @@ func (jc *jetstreamConsumer) Close() error {
 
 	// Return nil as the actual consumer lifetime is managed by the JetStream server
 	// and its configuration (TTL, interest, etc.)
-	return nil
+	if jc == nil || jc.connector == nil {
+		return nil
+	}
+	return jc.connector.ConfirmClose()
 }
 
 func (jc *jetstreamConsumer) UseV1Decoding() bool {

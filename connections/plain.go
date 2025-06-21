@@ -47,24 +47,22 @@ type plainConnection struct {
 }
 
 func (c *plainConnection) Close() error {
-	if c.natsConnection == nil {
-		return nil
-	}
-
-	return c.natsConnection.Drain()
+	// Don't drain the underlying connection as it may be used by other components
+	// Actual connection cleanup should be managed at a higher level
+	return nil
 }
 
 func (c *plainConnection) Raw() interface{} {
 	return c.natsConnection
 }
 
-func (c *plainConnection) CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error) {
+func (c *plainConnection) CreateTopic(ctx context.Context, opts *TopicOptions, connector Connector) (Topic, error) {
 
 	useV1Encoding := !c.version.V2Supported() || c.useV1Encoding
-	return &plainNatsTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, plainConn: c.natsConnection, useV1Encoding: useV1Encoding}, nil
+	return &plainNatsTopic{subject: opts.Subject, subjectExtHeader: opts.HeaderExtendingSubject, plainConn: c.natsConnection, useV1Encoding: useV1Encoding, connector: connector}, nil
 }
 
-func (c *plainConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error) {
+func (c *plainConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions, connector Connector) (Queue, error) {
 
 	// We force the batch fetch size to 1, as only jetstream enabled connections can do batch fetches
 	// see: https://pkg.go.dev/github.com/nats-io/nats.go@v1.30.1#Conn.QueueSubscribeSync
@@ -95,7 +93,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 	return &natsConsumer{consumer: subsc, isQueueGroup: false,
 		batchFetchTimeout: opts.ConsumerConfig.MaxRequestExpires,
-		useV1Decoding:     useV1Decoding}, nil
+		useV1Decoding:     useV1Decoding, connector: connector}, nil
 
 }
 
@@ -108,12 +106,17 @@ type plainNatsTopic struct {
 	subjectExtHeader string
 	plainConn        *nats.Conn
 	useV1Encoding    bool
+	connector        Connector
 }
 
 func (t *plainNatsTopic) Close() error {
 	// Nothing specific to close for plainNatsTopic
 	// The underlying NATS connection is managed by the plainConnection
-	return nil
+	if t == nil || t.connector == nil {
+		return nil
+	}
+
+	return t.connector.ConfirmClose()
 }
 
 func (t *plainNatsTopic) UseV1Encoding() bool {
@@ -150,10 +153,16 @@ type natsConsumer struct {
 	isQueueGroup      bool
 	batchFetchTimeout time.Duration
 	useV1Decoding     bool
+	connector         Connector
 }
 
 func (q *natsConsumer) Close() error {
-	return q.consumer.Drain()
+
+	if q == nil || q.connector == nil {
+		return nil
+	}
+
+	return q.connector.ConfirmClose()
 }
 
 func (q *natsConsumer) UseV1Decoding() bool {

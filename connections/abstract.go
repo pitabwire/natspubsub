@@ -100,11 +100,37 @@ type Topic interface {
 }
 
 type Connection interface {
-	Raw() interface{}
-	CreateSubscription(ctx context.Context, opts *SubscriptionOptions) (Queue, error)
-	CreateTopic(ctx context.Context, opts *TopicOptions) (Topic, error)
+	Raw() any
+	CreateSubscription(ctx context.Context, opts *SubscriptionOptions, connector Connector) (Queue, error)
+	CreateTopic(ctx context.Context, opts *TopicOptions, connector Connector) (Topic, error)
 	DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error
 	Close() error
+}
+
+type Connector interface {
+	Connection() Connection
+	ConfirmClose() error
+	ConfirmOpen() int32
+}
+
+type wconn struct {
+	conn Connection
+}
+
+func (o *wconn) Connection() Connection {
+	return o.conn
+}
+
+func (o *wconn) ConfirmOpen() int32 {
+	return 0
+}
+
+func (o *wconn) ConfirmClose() error {
+	return nil
+}
+
+func WrapConnection(conn Connection) Connector {
+	return &wconn{conn: conn}
 }
 
 var semVerRegexp = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
