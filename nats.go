@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nats-io/nats.go/jetstream"
 	"net/url"
 	"slices"
 	"strconv"
@@ -249,24 +248,9 @@ func (o *defaultDialer) cleanupOpener(connectionURL string) error {
 		return nil
 	}
 
-	// Get the raw connection
-	var natsConn *nats.Conn
-
 	// Extract the underlying NATS connection based on the type
-	if conn := opener.Connection().Raw(); conn != nil {
-		switch v := conn.(type) {
-		case *nats.Conn:
-			natsConn = v
-		case jetstream.JetStream:
-			natsConn = v.Conn()
-		}
-	}
-
-	var err error
-	// Drain the connection if we have one
-	if natsConn != nil {
-		err = natsConn.Drain() // Ignoring errors during cleanup
-	}
+	conn := opener.Connection()
+	err := conn.Close()
 
 	// Remove from the map
 	o.openerMap.Delete(connectionURL)

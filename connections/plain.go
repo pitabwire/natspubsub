@@ -47,9 +47,15 @@ type plainConnection struct {
 }
 
 func (c *plainConnection) Close() error {
-	// Don't drain the underlying connection as it may be used by other components
-	// Actual connection cleanup should be managed at a higher level
-	return nil
+	// Only drain the underlying connection if no one else needs it. It may be being used by other components
+	// Actual connection cleanup should is managed at a higher level, using the Connector implementation in URLOpener
+	if c == nil || c.natsConnection == nil {
+		return nil
+	}
+
+	// Drain the connection if we have one
+	return c.natsConnection.Drain()
+
 }
 
 func (c *plainConnection) Raw() interface{} {

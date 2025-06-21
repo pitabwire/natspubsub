@@ -28,8 +28,18 @@ type jetstreamConnection struct {
 }
 
 func (c *jetstreamConnection) Close() error {
-	// Don't drain the underlying connection as it may be used by other components
-	// The jetstream context itself doesn't need explicit cleanup
+	// Only drain the underlying connection if no one else needs it. It may be being used by other components
+	// Actual connection cleanup should is managed at a higher level, using the Connector implementation in URLOpener
+	if c == nil || c.jetStream == nil {
+		return nil
+	}
+
+	conn := c.jetStream.Conn()
+	// Drain the connection if we have one
+	if conn != nil {
+		return conn.Drain()
+	}
+
 	return nil
 }
 

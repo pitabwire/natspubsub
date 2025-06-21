@@ -126,7 +126,7 @@ func (o *wconn) ConfirmOpen() int32 {
 }
 
 func (o *wconn) ConfirmClose() error {
-	return nil
+	return o.conn.Close()
 }
 
 func WrapConnection(conn Connection) Connector {
