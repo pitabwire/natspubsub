@@ -86,7 +86,6 @@ var ConsumerURIParameters = []string{
 }
 var allowedParameters []string // Start with the first slice
 
-var errInvalidUrl = errors.New("natspubsub: invalid connection url")
 var errNotSubjectInitialized = errors.New("natspubsub: subject not initialised")
 var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
 var errNotSupportedParameter = fmt.Errorf("natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
@@ -158,7 +157,7 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 		connectionURL:       connectionUrl,
 	}
 
-	// Initialize reference count to 1
+	// Initialise reference count to 1
 	opener.refCount.Store(1)
 
 	o.openerMap.Store(connectionUrl, opener)
@@ -255,26 +254,6 @@ func (o *defaultDialer) cleanupOpener(connectionURL string) error {
 	// Remove from the map
 	o.openerMap.Delete(connectionURL)
 	return err
-}
-
-// closeAllConnections drains and removes all connections in the openerMap
-func (o *defaultDialer) closeAllConnections() error {
-
-	var finalError []error
-
-	o.openerMap.Range(func(key, _ any) bool {
-		connectionUrl := key.(string)
-		err := o.cleanupOpener(connectionUrl)
-		if err != nil {
-			finalError = append(finalError, err)
-		}
-		return true
-	})
-
-	if len(finalError) > 0 {
-		return errors.Join(finalError...)
-	}
-	return nil
 }
 
 // Scheme is the URL scheme natspubsub registers its URLOpeners under on pubsub.DefaultMux.
