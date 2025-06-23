@@ -47,16 +47,10 @@ type BatchOptions struct {
 }
 
 func (b *BatchOptions) To() *batcher.Options {
-
-	maxBatchSize := b.MaxBatchSize
-	if maxBatchSize == 0 {
-		maxBatchSize = 1
-	}
-
 	return &batcher.Options{
 		MaxHandlers:      b.MaxHandlers,
 		MinBatchSize:     b.MinBatchSize,
-		MaxBatchSize:     maxBatchSize,
+		MaxBatchSize:     b.MaxBatchSize,
 		MaxBatchByteSize: b.MaxBatchByteSize,
 	}
 }

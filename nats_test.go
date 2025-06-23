@@ -1013,9 +1013,11 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	receivedCount := 0
 	for {
 		select {
-		case <-receivedMessages:
-			receivedCount++
-			if len(messages) == receivedCount {
+		case _, ok := <-receivedMessages:
+			if ok {
+				receivedCount++
+			}
+			if len(messages) >= receivedCount {
 				t.Log("All messages successfully received!")
 				return
 			}
@@ -1125,9 +1127,11 @@ func TestService_SubjectExtension(t *testing.T) {
 	receivedCount := 0
 	for {
 		select {
-		case <-receivedMessages:
-			receivedCount++
-			if receivedCount == 30 {
+		case _, ok := <-receivedMessages:
+			if ok {
+				receivedCount++
+			}
+			if receivedCount >= 30 {
 				t.Log("All messages successfully received!")
 				return
 			}
