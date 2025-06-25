@@ -14,8 +14,6 @@ import (
 	"gocloud.dev/pubsub/driver"
 )
 
-const jetstreamDefaultPullTimeout = 100 * time.Millisecond
-
 func NewJetstream(natsConn *nats.Conn) (Connection, error) {
 
 	js, err := jetstream.New(natsConn)
@@ -227,31 +225,11 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		batchCount = 1
 	}
 
-	internalPullTimeout := jetstreamDefaultPullTimeout
-	if jc.pullWaitTimeout < internalPullTimeout {
-		internalPullTimeout = jc.pullWaitTimeout
+	messages, err := jc.pullMessages(ctx, batchCount, jc.pullWaitTimeout)
+	if err != nil {
+		return messages, err
 	}
-
-	fetchDeadLine := time.Now().Add(jc.pullWaitTimeout)
-
-	for time.Now().Before(fetchDeadLine) {
-
-		messages, err := jc.pullMessages(ctx, batchCount, internalPullTimeout)
-		if err != nil {
-			return messages, err
-		}
-
-		if len(messages) > 0 {
-			return messages, nil
-		}
-
-		internalPullTimeout = internalPullTimeout * 2
-		if time.Now().Add(internalPullTimeout).After(fetchDeadLine) {
-			internalPullTimeout = time.Until(fetchDeadLine)
-		}
-	}
-
-	return nil, nil
+	return messages, nil
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {

@@ -53,7 +53,7 @@ const (
 	QueryParamSubject               = "subject"
 	QueryParamHeaderToExtendSubject = "header_to_extended_subject"
 	QueryParamReceiveWaitTimeout    = "receive_wait_timeout"
-	DefaultReceiveWaitTimeout       = 30 * time.Second
+	DefaultReceiveWaitTimeout       = 500 * time.Millisecond
 
 	ReceiveBatchConfigPrefix = "receive_batch_"
 	AckBatchConfigPrefix     = "ack_batch_"
