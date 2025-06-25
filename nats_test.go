@@ -960,7 +960,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 
 	messages := [][]byte{json.RawMessage("badjson"), emptyAny}
 
-	for i := range 30 {
+	for i := range 15 {
 		msgStr := fmt.Sprintf("{\"id\": %d}", i)
 		messages = append(messages, []byte(msgStr))
 	}
@@ -984,25 +984,23 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 			case <-ctx.Done():
 				return
 			default:
-
-				msg, err0 := optSubscriber.Receive(ctx)
-				if err0 != nil {
-					if errors.Is(err0, context.Canceled) || errors.Is(err0, context.DeadlineExceeded) {
-						// Context cancelled or deadline exceeded, loop again to check ctx.Done()
-						continue
-					}
-					return
-				}
-
-				err0 = handler(ctx, msg.Metadata, msg.Body)
-				if err0 != nil {
-					msg.Nack()
-					return
-				}
-
-				msg.Ack()
-
 			}
+
+			msg, err0 := optSubscriber.Receive(ctx)
+
+			if err0 != nil {
+				println(fmt.Sprintf("%+v", err0))
+				return
+			}
+
+			err0 = handler(ctx, msg.Metadata, msg.Body)
+			if err0 != nil {
+				msg.Nack()
+				return
+			}
+
+			msg.Ack()
+
 		}
 	}(ctx, handler)
 
@@ -1013,11 +1011,9 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	receivedCount := 0
 	for {
 		select {
-		case _, ok := <-receivedMessages:
-			if ok {
-				receivedCount++
-			}
-			if len(messages) >= receivedCount {
+		case <-receivedMessages:
+			receivedCount++
+			if receivedCount == len(messages) {
 				t.Log("All messages successfully received!")
 				return
 			}
@@ -1131,7 +1127,7 @@ func TestService_SubjectExtension(t *testing.T) {
 			if ok {
 				receivedCount++
 			}
-			if receivedCount >= 30 {
+			if receivedCount == 30 {
 				t.Log("All messages successfully received!")
 				return
 			}

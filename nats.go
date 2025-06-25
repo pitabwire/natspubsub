@@ -30,7 +30,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"slices"
 	"strconv"
@@ -41,6 +40,7 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/pitabwire/natspubsub/connections"
+	"github.com/pitabwire/natspubsub/errorutil"
 	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub"
 	"gocloud.dev/pubsub/driver"
@@ -86,9 +86,9 @@ var ConsumerURIParameters = []string{
 }
 var allowedParameters []string // Start with the first slice
 
-var errNotSubjectInitialized = errors.New("natspubsub: subject not initialised")
-var errDuplicateParameter = errors.New("natspubsub: avoid specifying parameters more than once")
-var errNotSupportedParameter = fmt.Errorf("natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
+var errNotSubjectInitialized = errorutil.New(gcerrors.NotFound, "natspubsub: subject not initialised")
+var errDuplicateParameter = errorutil.New(gcerrors.InvalidArgument, "natspubsub: avoid specifying parameters more than once")
+var errNotSupportedParameter = errorutil.Newf(gcerrors.InvalidArgument, "natspubsub: unsupported parameter used, supported parameters include [ %s ]", strings.Join(allowedParameters, ", "))
 
 func init() {
 
@@ -168,12 +168,12 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnabled bool, useV1Encoding bool) (connections.Connection, error) {
 	natsConn, err := nats.Connect(connectionUrl)
 	if err != nil {
-		return nil, fmt.Errorf("natspubsub: failed to dial server using %q: %v", connectionUrl, err)
+		return nil, errorutil.Wrapf(err, gcerrors.FailedPrecondition, "failed to dial server using %q", connectionUrl)
 	}
 
 	sv, err := connections.ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
-		return nil, fmt.Errorf("natspubsub: failed to parse NATS server version %q: %v", natsConn.ConnectedServerVersion(), err)
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, " failed to parse NATS server version %q", natsConn.ConnectedServerVersion())
 	}
 
 	var conn connections.Connection
@@ -185,7 +185,7 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnable
 	}
 
 	if err != nil {
-		return nil, err
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "natspubsub: failed to create connection")
 	}
 
 	return conn, nil
@@ -221,7 +221,7 @@ func (o *defaultDialer) featureIsEnabledViaUrl(q url.Values, key string) bool {
 func (o *defaultDialer) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic, error) {
 	opener, err := o.defaultConn(ctx, u)
 	if err != nil {
-		return nil, fmt.Errorf("open topic %v: failed to open default connection: %v", u, err)
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "open topic %v: failed to open default connection", u)
 	}
 	return opener.OpenTopicURL(ctx, u)
 }
@@ -229,7 +229,7 @@ func (o *defaultDialer) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.T
 func (o *defaultDialer) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 	opener, err := o.defaultConn(ctx, u)
 	if err != nil {
-		return nil, fmt.Errorf("open subscription %v: failed to open default connection: %v", u, err)
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "open subscription %v: failed to open default connection", u)
 	}
 	return opener.OpenSubscriptionURL(ctx, u)
 }
@@ -617,21 +617,9 @@ func (t *topic) ErrorAs(error, interface{}) bool {
 
 // ErrorCode implements driver.Conn.ErrorCode
 func (t *topic) ErrorCode(err error) gcerrors.ErrorCode {
-	switch {
-	case err == nil:
-		return gcerrors.OK
-	case errors.Is(err, context.Canceled):
-		return gcerrors.Canceled
-	case errors.Is(err, errNotSubjectInitialized):
-		return gcerrors.NotFound
-	case errors.Is(err, nats.ErrBadSubject):
-		return gcerrors.FailedPrecondition
-	case errors.Is(err, nats.ErrAuthorization):
-		return gcerrors.PermissionDenied
-	case errors.Is(err, nats.ErrMaxPayload), errors.Is(err, nats.ErrReconnectBufExceeded):
-		return gcerrors.ResourceExhausted
-	}
-	return gcerrors.Unknown
+
+	// Use our error mapping function for all other cases
+	return errorutil.MapErrorCode(err)
 }
 
 // Close implements driver.Conn.Close.
@@ -735,23 +723,8 @@ func (*subscription) ErrorAs(error, interface{}) bool {
 
 // ErrorCode implements driver.Subscription.ErrorCode
 func (*subscription) ErrorCode(err error) gcerrors.ErrorCode {
-	switch {
-	case err == nil:
-		return gcerrors.OK
-	case errors.Is(err, context.Canceled):
-		return gcerrors.Canceled
-	case errors.Is(err, errNotSubjectInitialized), errors.Is(err, nats.ErrBadSubscription):
-		return gcerrors.NotFound
-	case errors.Is(err, nats.ErrBadSubject), errors.Is(err, nats.ErrTypeSubscription):
-		return gcerrors.FailedPrecondition
-	case errors.Is(err, nats.ErrAuthorization):
-		return gcerrors.PermissionDenied
-	case errors.Is(err, nats.ErrMaxMessages), errors.Is(err, nats.ErrSlowConsumer):
-		return gcerrors.ResourceExhausted
-	case errors.Is(err, nats.ErrTimeout):
-		return gcerrors.DeadlineExceeded
-	}
-	return gcerrors.Unknown
+	// Use our error mapping function for all other cases
+	return errorutil.MapErrorCode(err)
 }
 
 // Close implements driver.Subscription.Close.

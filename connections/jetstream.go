@@ -9,14 +9,18 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/natspubsub/errorutil"
+	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub/driver"
 )
+
+const jetstreamDefaultPullTimeout = 100 * time.Millisecond
 
 func NewJetstream(natsConn *nats.Conn) (Connection, error) {
 
 	js, err := jetstream.New(natsConn)
 	if err != nil {
-		return nil, fmt.Errorf("natspubsub: failed to convert connection to jetstream : %v", err)
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "natspubsub: failed to convert connection to jetstream")
 	}
 
 	return &jetstreamConnection{jetStream: js}, nil
@@ -53,13 +57,13 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 
 		stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
 		if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
-			return nil, err
+			return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to get stream")
 		}
 
 		if stream == nil {
 			_, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
 			if err != nil {
-				return nil, err
+				return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update stream %s", opts.StreamConfig.Name)
 			}
 		}
 	}
@@ -71,13 +75,13 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 
 	stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
 	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
-		return nil, err
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to get stream %s", opts.StreamConfig.Name)
 	}
 
 	if stream == nil {
 		stream, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
 		if err != nil {
-			return nil, err
+			return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update stream %s", opts.StreamConfig.Name)
 		}
 	}
 
@@ -86,7 +90,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 	// Create durable consumer
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, opts.ConsumerConfig)
 	if err != nil {
-		return nil, err
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update consumer %s", opts.ConsumerConfig.Name)
 	}
 
 	return &jetstreamConsumer{consumer: consumer, pullWaitTimeout: opts.ReceiveWaitTimeOut, isQueueGroup: isDurableQueue, connector: connector}, nil
@@ -96,7 +100,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
 	err := c.jetStream.DeleteConsumer(ctx, opts.StreamConfig.Name, opts.ConsumerConfig.Name)
 	if err != nil {
-		return err
+		return errorutil.Wrapf(err, gcerrors.Internal, "failed to delete consumer %s from stream %s", opts.ConsumerConfig.Name, opts.StreamConfig.Name)
 	}
 	return nil
 }
@@ -133,7 +137,7 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 
 	ack, err := t.jetStream.PublishMsg(ctx, msg)
 	if err != nil {
-		return "", err
+		return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
 	}
 	return createLoggableID(ack.Stream, ack.Sequence), nil
 }
@@ -171,66 +175,95 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 	return nil
 }
 
-func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-
-	// Check for context cancellation first
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	if batchCount <= 0 {
-		batchCount = 1
-	}
-
-	// Pre-allocate message slice with capacity of batchCount to reduce allocations
+func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, internalPullTimeout time.Duration) ([]*driver.Message, error) {
 	messages := make([]*driver.Message, 0, batchCount)
 
 	// Use Fetch to block for extended periods
 	// This provides better behaviour when there are no messages available
-	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(jc.pullWaitTimeout))
+	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(internalPullTimeout))
 	if err != nil {
-		return nil, err
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to fetch messages from consumer")
 	}
 
-	// Process messages from the batch channel with timeout to avoid blocking forever
-	messagesChan := msgBatch.Messages()
-
-	// Process messages while being responsive to context cancellation
+	// Process messages from the batch channel with timeout to avoid blocking forever and being responsive to context cancellation
 	for {
 		select {
 		case <-ctx.Done():
-			return messages, ctx.Err()
-		case msg, ok := <-messagesChan:
+			return messages, errorutil.Wrap(ctx.Err(), gcerrors.Canceled, "context canceled while processing messages")
+
+		case msg, ok := <-msgBatch.Messages():
+
+			if !ok {
+				// Channel closed, we've processed all messages
+				return messages, nil
+			}
 
 			if msg != nil {
 				drvMsg, err0 := decodeJsMessage(msg)
 				if err0 != nil {
-					println("error decoding message:", err0)
-					return messages, err0
+					return messages, errorutil.Wrap(err0, gcerrors.Internal, "message decoding error")
+
 				}
 				messages = append(messages, drvMsg)
 
 			}
 
-			if !ok {
-				// Channel closed, we've processed all messages
-				return messages, msgBatch.Error()
+			if msgBatch.Error() != nil {
+				return messages, errorutil.Wrap(msgBatch.Error(), gcerrors.Internal, "batch fetch error")
 			}
 
 		}
 	}
 }
 
+func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
+
+	// Check for context cancellation first
+	if err := ctx.Err(); err != nil {
+		return nil, errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
+	}
+
+	if batchCount <= 0 {
+		batchCount = 1
+	}
+
+	internalPullTimeout := jetstreamDefaultPullTimeout
+	if jc.pullWaitTimeout < internalPullTimeout {
+		internalPullTimeout = jc.pullWaitTimeout
+	}
+
+	fetchDeadLine := time.Now().Add(jc.pullWaitTimeout)
+
+	for time.Now().Before(fetchDeadLine) {
+
+		messages, err := jc.pullMessages(ctx, batchCount, internalPullTimeout)
+		if err != nil {
+			return messages, err
+		}
+
+		if len(messages) > 0 {
+			return messages, nil
+		}
+
+		internalPullTimeout = internalPullTimeout * 2
+		if time.Now().Add(internalPullTimeout).After(fetchDeadLine) {
+			internalPullTimeout = fetchDeadLine.Sub(time.Now())
+		}
+	}
+
+	return nil, nil
+}
+
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
-		return err
+		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
 	}
 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return nil
+			return errorutil.Wrap(err, gcerrors.Canceled, "context canceled during acknowledgment")
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -254,13 +287,13 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
-		return nil
+		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
 	}
 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return nil
+			return errorutil.Wrap(err, gcerrors.Canceled, "context canceled during negative acknowledgment")
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -273,7 +306,7 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 			// Log the error but continue processing other messages
 			// We don't return the error to maintain compatibility with existing tests
 			// that expect Nack to always succeed
-			return nil
+			return errorutil.Wrap(err, gcerrors.Internal, "failed to negatively acknowledge message")
 		}
 	}
 
@@ -293,7 +326,7 @@ func jsMessageAsFunc(msg jetstream.Msg) func(interface{}) bool {
 
 func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, nats.ErrInvalidMsg
+		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
 	}
 
 	dm := &driver.Message{

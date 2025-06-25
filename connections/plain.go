@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/gob"
 	"errors"
-	"fmt"
 	"net/url"
 	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nats-io/nats.go"
+	"github.com/pitabwire/natspubsub/errorutil"
+	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub/driver"
 )
 
@@ -25,7 +26,7 @@ var bufferPool = sync.Pool{
 func NewPlainWithEncodingV1(natsConn *nats.Conn, useV1Encoding bool) (Connection, error) {
 	sv, err := ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
-		return nil, err
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to parse server version: %s", natsConn.ConnectedServerVersion())
 	}
 
 	return newPlainConnection(natsConn, sv, useV1Encoding), nil
@@ -82,7 +83,8 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subject, opts.ConsumerConfig.Durable)
 		if err != nil {
-			return nil, err
+			return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to subscribe to queue %s on subject %s",
+				opts.ConsumerConfig.Durable, opts.Subject)
 		}
 
 		return &natsConsumer{consumer: subsc, isQueueGroup: true,
@@ -94,7 +96,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 	// loosing some messages is ok as this essentially is an atmost once delivery situation here.
 	subsc, err := c.natsConnection.SubscribeSync(opts.Subject)
 	if err != nil {
-		return nil, err
+		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to subscribe to subject %s", opts.Subject)
 	}
 
 	return &natsConsumer{consumer: subsc, isQueueGroup: false,
@@ -148,10 +150,16 @@ func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (strin
 	var err error
 	if t.UseV1Encoding() {
 		err = t.plainConn.Publish(msg.Subject, msg.Data)
-		return "", err
+		if err != nil {
+			return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
+		}
+		return "", nil
 	}
 	err = t.plainConn.PublishMsg(msg)
-	return "", err
+	if err != nil {
+		return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
+	}
+	return "", nil
 }
 
 type natsConsumer struct {
@@ -209,7 +217,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 	for i := 0; i < batchCount; i++ {
 		// Check if context is done before attempting to fetch each message
 		if err := ctx.Err(); err != nil {
-			return messages, err
+			return messages, errorutil.Wrap(err, gcerrors.Canceled, "context canceled while receiving messages")
 		}
 
 		// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
@@ -231,7 +239,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 				return messages, nil
 			}
 			// For other errors, stop and return the error
-			return nil, err
+			return messages, errorutil.Wrap(err, gcerrors.Internal, "error receiving message")
 		}
 
 		var driverMsg *driver.Message
@@ -242,7 +250,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		}
 
 		if err != nil {
-			return nil, err
+			return nil, errorutil.Wrap(err, gcerrors.Internal, "error decoding message")
 		}
 
 		messages = append(messages, driverMsg)
@@ -254,7 +262,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
-		return err
+		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
 	}
 
 	for _, id := range ids {
@@ -262,7 +270,10 @@ func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 		if !ok {
 			continue
 		}
-		_ = msg.Ack()
+		err := msg.Ack()
+		if err != nil {
+			return nil
+		}
 	}
 
 	return nil
@@ -271,7 +282,7 @@ func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
-		return err
+		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
 	}
 
 	for _, id := range ids {
@@ -279,7 +290,10 @@ func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 		if !ok {
 			continue
 		}
-		_ = msg.Nak()
+		err := msg.Nak()
+		if err != nil {
+			return errorutil.Wrap(err, gcerrors.Internal, "failed to negatively acknowledge message")
+		}
 	}
 
 	return nil
@@ -298,7 +312,7 @@ func messageAsFunc(msg *nats.Msg) func(interface{}) bool {
 
 func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, nats.ErrInvalidMsg
+		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
 	}
 
 	dm := &driver.Message{}
@@ -325,34 +339,16 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	// Now decode the body
 	var body []byte
 	if err := dec.Decode(&body); err != nil {
-		return nil, err
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to decode message body")
 	}
 	dm.Body = body
 
 	return dm, nil
 }
 
-func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
-
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	// Always encode metadata, even if empty - this ensures consistent message format
-	if err := enc.Encode(dm.Metadata); err != nil {
-		return nil, err
-	}
-	if err := enc.Encode(dm.Body); err != nil {
-		return nil, err
-	}
-	return &nats.Msg{
-		Subject: sub,
-		Data:    buf.Bytes(),
-	}, nil
-
-}
-
 func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, nats.ErrInvalidMsg
+		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
 	}
 
 	dm := driver.Message{
@@ -388,6 +384,24 @@ func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 	return &dm, nil
 }
 
+func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
+
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	// Always encode metadata, even if empty - this ensures consistent message format
+	if err := enc.Encode(dm.Metadata); err != nil {
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to encode message metadata")
+	}
+	if err := enc.Encode(dm.Body); err != nil {
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to encode message body")
+	}
+	return &nats.Msg{
+		Subject: sub,
+		Data:    buf.Bytes(),
+	}, nil
+
+}
+
 func encodeMessage(dm *driver.Message, sub string) (*nats.Msg, error) {
 	var header nats.Header
 	if dm.Metadata != nil {
@@ -395,22 +409,23 @@ func encodeMessage(dm *driver.Message, sub string) (*nats.Msg, error) {
 		for k, v := range dm.Metadata {
 
 			if !utf8.ValidString(k) {
-				return nil, fmt.Errorf("pubsub: Message.Metadata keys must be valid UTF-8 strings: %q", k)
+				return nil, errorutil.Newf(gcerrors.InvalidArgument, "pubsub: Message.Metadata keys must be valid UTF-8 strings: %q", k)
 			}
 			if !utf8.ValidString(v) {
-				return nil, fmt.Errorf("pubsub: Message.Metadata values must be valid UTF-8 strings: %q", v)
+				return nil, errorutil.Newf(gcerrors.InvalidArgument, "pubsub: Message.Metadata values must be valid UTF-8 strings: %q", v)
 			}
 
-			// URL encode the key and value
+			// URL-encode key and value to ensure they are valid header fields
 			encodedKey := url.QueryEscape(k)
 			encodedValue := url.QueryEscape(v)
 
-			header.Add(encodedKey, encodedValue)
+			header.Set(encodedKey, encodedValue)
 		}
 	}
+
 	return &nats.Msg{
 		Subject: sub,
-		Data:    dm.Body,
 		Header:  header,
+		Data:    dm.Body,
 	}, nil
 }

@@ -2,7 +2,6 @@ package connections
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -10,6 +9,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/pitabwire/natspubsub/errorutil"
+	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub/batcher"
 	"gocloud.dev/pubsub/driver"
 )
@@ -132,7 +133,7 @@ var semVerRegexp = regexp.MustCompile(`\Av?([0-9]+)\.?([0-9]+)?\.?([0-9]+)?`)
 func ServerVersion(version string) (*Version, error) {
 	m := semVerRegexp.FindStringSubmatch(version)
 	if m == nil {
-		return nil, errors.New("failed to parse server version")
+		return nil, errorutil.New(gcerrors.InvalidArgument, "failed to parse server version")
 	}
 	var (
 		major, minor, patch int
@@ -140,15 +141,15 @@ func ServerVersion(version string) (*Version, error) {
 	)
 	major, err = strconv.Atoi(m[1])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse server version major number %q: %v", m[1], err)
+		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version major number %q", m[1])
 	}
 	minor, err = strconv.Atoi(m[2])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse server version minor number %q: %v", m[2], err)
+		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version minor number %q", m[2])
 	}
 	patch, err = strconv.Atoi(m[3])
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse server version patch number %q: %v", m[3], err)
+		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version patch number %q", m[3])
 	}
 	return &Version{Major: major, Minor: minor, Patch: patch}, nil
 }
