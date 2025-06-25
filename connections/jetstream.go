@@ -247,7 +247,7 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 
 		internalPullTimeout = internalPullTimeout * 2
 		if time.Now().Add(internalPullTimeout).After(fetchDeadLine) {
-			internalPullTimeout = fetchDeadLine.Sub(time.Now())
+			internalPullTimeout = time.Until(fetchDeadLine)
 		}
 	}
 
