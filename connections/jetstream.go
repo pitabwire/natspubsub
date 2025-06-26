@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -89,7 +90,7 @@ func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *Subs
 		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update consumer %s", opts.ConsumerConfig.Name)
 	}
 
-	return &jetstreamConsumer{consumer: consumer, pullWaitTimeout: opts.ReceiveWaitTimeOut, connector: connector}, nil
+	return newJetstreamConsumer(connector, consumer, opts.ReceiveWaitTimeOut), nil
 
 }
 
@@ -143,8 +144,17 @@ type jetstreamConsumer struct {
 
 	consumer    jetstream.Consumer
 	activeBatch jetstream.MessageBatch
+	mu          sync.Mutex
 
 	pullWaitTimeout time.Duration
+}
+
+func newJetstreamConsumer(connector Connector, consumer jetstream.Consumer, pullWaitTimeout time.Duration) *jetstreamConsumer {
+	return &jetstreamConsumer{
+		connector:       connector,
+		consumer:        consumer,
+		pullWaitTimeout: pullWaitTimeout,
+	}
 }
 
 func (jc *jetstreamConsumer) Close() error {
@@ -168,67 +178,95 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 	return nil
 }
 
-func (jc *jetstreamConsumer) pullMessages(ctx context.Context) ([]*driver.Message, error) {
-	messages := make([]*driver.Message, 0)
+func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount int, batchTimeout time.Duration) (jetstream.MessageBatch, error) {
+	jc.mu.Lock()
+	defer jc.mu.Unlock()
 
-	// Process messages from the batch channel with timeout to avoid blocking forever and being responsive to context cancellation
+	if jc.activeBatch != nil {
+		return jc.activeBatch, nil
+	}
+
+	// Check for context cancellation
+	if err := ctx.Err(); err != nil {
+		return nil, errorutil.Wrap(err, gcerrors.Canceled, "context canceled while setting up batch")
+	}
+
+	// Use Fetch to block for extended periods
+	// This provides better behavior when there are no messages available
+	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
+	if err != nil {
+		// Map connection-related errors
+		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
+			return nil, errorutil.Wrap(err, gcerrors.ResourceExhausted, "connection issue while setting up batch")
+		}
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to setup fetch from consumer")
+	}
+
+	jc.activeBatch = batch
+	return jc.activeBatch, nil
+}
+
+func (jc *jetstreamConsumer) clearActiveBatch() {
+	jc.mu.Lock()
+	jc.activeBatch = nil
+	jc.mu.Unlock()
+}
+
+func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, batchTimeout time.Duration) ([]*driver.Message, error) {
+	messages := make([]*driver.Message, 0, batchCount)
+
+	activeBatch, err := jc.setupActiveBatch(ctx, batchCount, batchTimeout)
+	if err != nil {
+		return nil, errorutil.Wrap(err, gcerrors.Internal, "active batch is nil")
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			// If we already have messages, return them instead of error
+			if len(messages) > 0 {
+				return messages, nil
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, errorutil.Wrap(ctx.Err(), gcerrors.DeadlineExceeded, "timeout while waiting for messages")
+			}
 			return messages, errorutil.Wrap(ctx.Err(), gcerrors.Canceled, "context canceled while processing messages")
 
-		case msg, ok := <-jc.activeBatch.Messages():
-
+		case msg, ok := <-activeBatch.Messages():
 			if !ok {
-				jc.activeBatch = nil
 				// Channel closed, we've processed all messages
+				// Let setupActiveBatch manage the activeBatch field
+				jc.clearActiveBatch()
 				return messages, nil
 			}
 
-			if jc.activeBatch.Error() != nil {
-				return messages, errorutil.Wrap(jc.activeBatch.Error(), gcerrors.Internal, "batch fetch error")
+			if activeBatch.Error() != nil {
+				err = activeBatch.Error()
+
+				// Clear the batch on error to allow retry on next call
+				jc.clearActiveBatch()
+				return messages, errorutil.Wrap(activeBatch.Error(), gcerrors.Internal, "batch fetch error")
 			}
 
 			drvMsg, err0 := decodeJsMessage(msg)
 			if err0 != nil {
-				return messages, errorutil.Wrap(err0, gcerrors.Internal, "message decoding error")
-
+				continue
 			}
 			messages = append(messages, drvMsg)
 
 			metadata, err0 := msg.Metadata()
 			if err0 != nil {
-				return messages, errorutil.Wrap(err0, gcerrors.Internal, "message metadata error")
-			}
-			if metadata.NumPending == 0 {
-				return messages, nil
+				continue
 			}
 
+			if len(messages) >= batchCount || metadata.NumPending == 0 {
+				return messages, nil
+			}
 		}
 	}
 }
 
-func (jc *jetstreamConsumer) setupActiveBatch(_ context.Context, batchCount int, batchTimeout time.Duration) error {
-
-	if jc.activeBatch != nil {
-		return nil
-	}
-
-	var err error
-
-	// Use Fetch to block for extended periods
-	// This provides better behaviour when there are no messages available
-	jc.activeBatch, err = jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-
-	// Check for context cancellation first
 	if err := ctx.Err(); err != nil {
 		return nil, errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
 	}
@@ -237,22 +275,21 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 		batchCount = 1
 	}
 
-	err := jc.setupActiveBatch(ctx, batchCount, jc.pullWaitTimeout)
-	if err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to setup fetch from consumer")
+	// Pull messages
+	messages, err := jc.pullMessages(ctx, batchCount, jc.pullWaitTimeout)
+
+	// Special handling for no messages case
+	if err == nil && len(messages) == 0 {
+		// This is an acceptable condition - no messages available
+		return messages, nil
 	}
 
-	messages, err := jc.pullMessages(ctx)
-	if err != nil {
-		return messages, err
-	}
-	return messages, nil
+	return messages, err
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
 
 	for _, id := range ids {
-		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
@@ -262,19 +299,15 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 			continue
 		}
 
-		// We don't use DoubleAck as it fails conformance tests
 		_ = msg.Ack()
-		// Ignore the error but continue processing other messages
-		// We don't return the error to maintain compatibility with existing tests
-		// that expect Ack to always succeed
 	}
+
 	return nil
 }
 
 func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
 
 	for _, id := range ids {
-		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
@@ -285,9 +318,6 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 		}
 
 		_ = msg.Nak()
-		// Ignore the error but continue processing other messages
-		// We don't return the error to maintain compatibility with existing tests
-		// that expect Nack to always succeed
 	}
 
 	return nil
@@ -318,7 +348,6 @@ func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	h := msg.Headers()
 
 	if h != nil {
-		// Pre-allocate md map with the expected capacity
 		dm.Metadata = make(map[string]string, len(h))
 
 		for k, v := range h {
@@ -327,15 +356,14 @@ func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 				sv = v[0]
 			}
 
-			// Decode URL-encoded key and value
 			decodedKey, err0 := url.QueryUnescape(k)
 			if err0 != nil {
-				decodedKey = k // Fallback to original if decoding fails
+				decodedKey = k
 			}
 
 			decodedValue, err0 := url.QueryUnescape(sv)
 			if err0 != nil {
-				decodedValue = sv // Fallback to original if decoding fails
+				decodedValue = sv
 			}
 
 			dm.Metadata[decodedKey] = decodedValue
