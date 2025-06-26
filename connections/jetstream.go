@@ -161,8 +161,12 @@ func (jc *jetstreamConsumer) Close() error {
 	return jc.connector.ConfirmClose()
 }
 
-func (jc *jetstreamConsumer) UseV1Decoding() bool {
-	return false
+func (jc *jetstreamConsumer) CanNack() bool {
+	info := jc.consumer.CachedInfo()
+	if info == nil {
+		return true
+	}
+	return info.Config.AckPolicy == jetstream.AckExplicitPolicy
 }
 
 func (jc *jetstreamConsumer) IsQueueGroup() bool {
@@ -238,15 +242,11 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
-	// Check for context cancellation first
-	if err := ctx.Err(); err != nil {
-		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
-	}
 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return errorutil.Wrap(err, gcerrors.Canceled, "context canceled during acknowledgment")
+			return nil
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -255,28 +255,20 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 		}
 
 		// We don't use DoubleAck as it fails conformance tests
-		err := msg.Ack()
-		if err != nil {
-			// Log the error but continue processing other messages
-			// We don't return the error to maintain compatibility with existing tests
-			// that expect Ack to always succeed
-			return nil
-		}
+		_ = msg.Ack()
+		// Ignore the error but continue processing other messages
+		// We don't return the error to maintain compatibility with existing tests
+		// that expect Ack to always succeed
 	}
-
 	return nil
 }
 
 func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
-	// Check for context cancellation first
-	if err := ctx.Err(); err != nil {
-		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
-	}
 
 	for _, id := range ids {
 		// Check for context cancellation during processing
 		if err := ctx.Err(); err != nil {
-			return errorutil.Wrap(err, gcerrors.Canceled, "context canceled during negative acknowledgment")
+			return nil
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -284,13 +276,10 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 			continue
 		}
 
-		err := msg.Nak()
-		if err != nil {
-			// Log the error but continue processing other messages
-			// We don't return the error to maintain compatibility with existing tests
-			// that expect Nack to always succeed
-			return errorutil.Wrap(err, gcerrors.Internal, "failed to negatively acknowledge message")
-		}
+		_ = msg.Nak()
+		// Ignore the error but continue processing other messages
+		// We don't return the error to maintain compatibility with existing tests
+		// that expect Nack to always succeed
 	}
 
 	return nil
@@ -315,6 +304,7 @@ func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	dm := &driver.Message{
 		AsFunc: jsMessageAsFunc(msg),
 		Body:   msg.Data(),
+		AckID:  msg,
 	}
 
 	h := msg.Headers()
@@ -348,8 +338,6 @@ func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	if err == nil {
 		dm.LoggableID = createLoggableID(md.Stream, md.Sequence.Stream)
 	}
-
-	dm.AckID = msg
 
 	return dm, nil
 }

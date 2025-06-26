@@ -694,7 +694,12 @@ func (s *subscription) SendAcks(ctx context.Context, ids []driver.AckID) error {
 }
 
 // CanNack implements driver.CanNack.
-func (s *subscription) CanNack() bool { return s != nil && s.queue != nil && s.queue.IsQueueGroup() }
+func (s *subscription) CanNack() bool {
+	if s == nil || s.queue == nil {
+		return false
+	}
+	return s.queue.CanNack()
+}
 
 // SendNacks implements driver.Subscription.SendNacks
 func (s *subscription) SendNacks(ctx context.Context, ids []driver.AckID) error {

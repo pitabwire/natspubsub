@@ -127,10 +127,6 @@ func (t *plainNatsTopic) Close() error {
 	return t.connector.ConfirmClose()
 }
 
-func (t *plainNatsTopic) UseV1Encoding() bool {
-	return t.useV1Encoding
-}
-
 func (t *plainNatsTopic) Encode(dm *driver.Message) (*nats.Msg, error) {
 
 	subject := t.Subject()
@@ -148,7 +144,7 @@ func (t *plainNatsTopic) Subject() string {
 }
 func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (string, error) {
 	var err error
-	if t.UseV1Encoding() {
+	if t.useV1Encoding {
 		err = t.plainConn.Publish(msg.Subject, msg.Data)
 		if err != nil {
 			return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
@@ -177,6 +173,10 @@ func (q *natsConsumer) Close() error {
 	}
 
 	return q.connector.ConfirmClose()
+}
+
+func (q *natsConsumer) CanNack() bool {
+	return false
 }
 
 func (q *natsConsumer) UseV1Decoding() bool {
@@ -259,43 +259,15 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 	return messages, nil
 }
 
-func (q *natsConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
-	// Check for context cancellation first
-	if err := ctx.Err(); err != nil {
-		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
-	}
-
-	for _, id := range ids {
-		msg, ok := id.(*nats.Msg)
-		if !ok {
-			continue
-		}
-		err := msg.Ack()
-		if err != nil {
-			return nil
-		}
-	}
-
+func (q *natsConsumer) Ack(_ context.Context, _ []driver.AckID) error {
+	// Just do nothing as plain nats does not have ack semantics
+	// In plain NATS, messages are fire-and-forget by default
+	// There’s no persistence and no built-in acknowledgment mechanism.
 	return nil
 }
 
-func (q *natsConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
-	// Check for context cancellation first
-	if err := ctx.Err(); err != nil {
-		return errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
-	}
-
-	for _, id := range ids {
-		msg, ok := id.(*nats.Msg)
-		if !ok {
-			continue
-		}
-		err := msg.Nak()
-		if err != nil {
-			return errorutil.Wrap(err, gcerrors.Internal, "failed to negatively acknowledge message")
-		}
-	}
-
+func (q *natsConsumer) Nack(_ context.Context, _ []driver.AckID) error {
+	// Just do nothing
 	return nil
 }
 
@@ -316,7 +288,6 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	}
 
 	dm := &driver.Message{}
-	dm.AckID = msg // Set to the original NATS message for proper acking
 	dm.AsFunc = messageAsFunc(msg)
 
 	// Try to decode as a v1 encoded message (with metadata and body encoded using gob)

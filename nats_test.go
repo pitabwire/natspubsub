@@ -921,11 +921,11 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	durableName := "durableframe-" + testID
 
 	receivedMessages := make(chan string, 1)
+	defer close(receivedMessages)
 
 	//nolint:unparam
 	handler := func(_ context.Context, _ map[string]string, message []byte) error {
-		msgStr := string(message)
-		receivedMessages <- msgStr
+		receivedMessages <- string(message)
 		return nil
 	}
 
@@ -937,7 +937,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 	// 5. Higher ack wait time - gives subscriber more time to process and acknowledge
 	// 6. MaxAckPending matches message count - prevent flow control from limiting delivery
 	streamOpt := fmt.Sprintf("nats://127.0.0.1:%d?jetstream=true&stream_name=%s&stream_retention=workqueue&stream_storage=memory&stream_subjects=%s&subject=%s", testPort, streamName, subjectName, subjectName)
-	consumerOpt := fmt.Sprintf("nats://127.0.0.1:%d?consumer_ack_policy=explicit&consumer_ack_wait=10s&consumer_deliver_policy=all&consumer_durable_name=%s&consumer_filter_subject=%s&consumer_max_ack_pending=32&consumer_max_deliver=5&jetstream=true&stream_name=%s&stream_retention=workqueue&stream_storage=memory&stream_subjects=%s&subject=%s",
+	consumerOpt := fmt.Sprintf("nats://127.0.0.1:%d?consumer_ack_policy=explicit&consumer_ack_wait=10s&consumer_deliver_policy=all&consumer_durable_name=%s&consumer_filter_subject=%s&jetstream=true&stream_name=%s&stream_retention=workqueue&stream_storage=memory&stream_subjects=%s&subject=%s",
 		testPort, durableName, subjectName, streamName, subjectName, subjectName)
 
 	optTopic, err := pubsub.OpenTopic(ctx, streamOpt)
@@ -960,7 +960,7 @@ func TestService_SubscriberValidateJetstreamMessages(t *testing.T) {
 
 	messages := [][]byte{json.RawMessage("badjson"), emptyAny}
 
-	for i := range 15 {
+	for i := range 300 {
 		msgStr := fmt.Sprintf("{\"id\": %d}", i)
 		messages = append(messages, []byte(msgStr))
 	}

@@ -71,7 +71,6 @@ type SubscriptionOptions struct {
 }
 
 type Queue interface {
-	UseV1Decoding() bool
 	// ReceiveMessages pulls messages from the nats queue server.
 	// If no messages are currently available, this method should block for
 	// no more than about 1 second. It can return an empty
@@ -82,6 +81,7 @@ type Queue interface {
 	ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error)
 	Unsubscribe() error
 	Ack(ctx context.Context, ids []driver.AckID) error
+	CanNack() bool
 	Nack(ctx context.Context, ids []driver.AckID) error
 	IsQueueGroup() bool
 	Close() error
