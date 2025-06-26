@@ -162,15 +162,7 @@ func (jc *jetstreamConsumer) Close() error {
 }
 
 func (jc *jetstreamConsumer) CanNack() bool {
-	info := jc.consumer.CachedInfo()
-	if info == nil {
-		return true
-	}
-	return info.Config.AckPolicy == jetstream.AckExplicitPolicy
-}
-
-func (jc *jetstreamConsumer) IsQueueGroup() bool {
-	return jc.isQueueGroup
+	return true
 }
 
 func (jc *jetstreamConsumer) Unsubscribe() error {

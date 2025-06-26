@@ -182,9 +182,6 @@ func (q *natsConsumer) CanNack() bool {
 func (q *natsConsumer) UseV1Decoding() bool {
 	return q.useV1Decoding
 }
-func (q *natsConsumer) IsQueueGroup() bool {
-	return false
-}
 
 func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()

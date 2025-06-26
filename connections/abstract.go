@@ -83,7 +83,6 @@ type Queue interface {
 	Ack(ctx context.Context, ids []driver.AckID) error
 	CanNack() bool
 	Nack(ctx context.Context, ids []driver.AckID) error
-	IsQueueGroup() bool
 	Close() error
 }
 
