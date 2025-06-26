@@ -192,7 +192,7 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 	}
 
 	// Use Fetch to block for extended periods
-	// This provides better behavior when there are no messages available
+	// This provides better behaviour when there are no messages available
 	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		// Map connection-related errors
@@ -240,12 +240,11 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 				return messages, nil
 			}
 
-			if activeBatch.Error() != nil {
-				err = activeBatch.Error()
-
+			err = activeBatch.Error()
+			if err != nil {
 				// Clear the batch on error to allow retry on next call
 				jc.clearActiveBatch()
-				return messages, errorutil.Wrap(activeBatch.Error(), gcerrors.Internal, "batch fetch error")
+				return messages, errorutil.Wrap(err, gcerrors.Internal, "batch fetch error")
 			}
 
 			drvMsg, err0 := decodeJsMessage(msg)
