@@ -173,12 +173,12 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 	return nil
 }
 
-func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, internalPullTimeout time.Duration) ([]*driver.Message, error) {
+func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, batchTimeout time.Duration) ([]*driver.Message, error) {
 	messages := make([]*driver.Message, 0, batchCount)
 
 	// Use Fetch to block for extended periods
 	// This provides better behaviour when there are no messages available
-	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(internalPullTimeout))
+	msgBatch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to fetch messages from consumer")
 	}
@@ -196,18 +196,23 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, i
 				return messages, nil
 			}
 
-			if msg != nil {
-				drvMsg, err0 := decodeJsMessage(msg)
-				if err0 != nil {
-					return messages, errorutil.Wrap(err0, gcerrors.Internal, "message decoding error")
-
-				}
-				messages = append(messages, drvMsg)
-
-			}
-
 			if msgBatch.Error() != nil {
 				return messages, errorutil.Wrap(msgBatch.Error(), gcerrors.Internal, "batch fetch error")
+			}
+
+			drvMsg, err0 := decodeJsMessage(msg)
+			if err0 != nil {
+				return messages, errorutil.Wrap(err0, gcerrors.Internal, "message decoding error")
+
+			}
+			messages = append(messages, drvMsg)
+
+			metadata, err0 := msg.Metadata()
+			if err0 != nil {
+				return messages, errorutil.Wrap(err0, gcerrors.Internal, "message metadata error")
+			}
+			if metadata.NumPending == 0 {
+				return messages, nil
 			}
 
 		}
