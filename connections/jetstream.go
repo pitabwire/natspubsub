@@ -11,7 +11,6 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pitabwire/natspubsub/errorutil"
-	"gocloud.dev/gcerrors"
 	"gocloud.dev/pubsub/driver"
 )
 
@@ -19,7 +18,7 @@ func NewJetstream(natsConn *nats.Conn) (Connection, error) {
 
 	js, err := jetstream.New(natsConn)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "natspubsub: failed to convert connection to jetstream")
+		return nil, errorutil.Wrapf(err, "natspubsub: failed to convert connection to jetstream")
 	}
 
 	return &jetstreamConnection{jetStream: js}, nil
@@ -53,17 +52,9 @@ func (c *jetstreamConnection) Raw() interface{} {
 func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOptions, connector Connector) (Topic, error) {
 
 	if opts.StreamConfig.Name != "" {
-
-		stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
-		if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
-			return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to get stream")
-		}
-
-		if stream == nil {
-			_, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
-			if err != nil {
-				return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update stream %s", opts.StreamConfig.Name)
-			}
+		_, err := c.processStreamConfig(ctx, opts.StreamConfig)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -72,32 +63,40 @@ func (c *jetstreamConnection) CreateTopic(ctx context.Context, opts *TopicOption
 
 func (c *jetstreamConnection) CreateSubscription(ctx context.Context, opts *SubscriptionOptions, connector Connector) (Queue, error) {
 
-	stream, err := c.jetStream.Stream(ctx, opts.StreamConfig.Name)
-	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to get stream %s", opts.StreamConfig.Name)
+	stream, err := c.processStreamConfig(ctx, opts.StreamConfig)
+	if err != nil {
+		return nil, err
 	}
-
-	if stream == nil {
-		stream, err = c.jetStream.CreateOrUpdateStream(ctx, opts.StreamConfig)
-		if err != nil {
-			return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update stream %s", opts.StreamConfig.Name)
-		}
-	}
-
 	// Create durable consumer
 	consumer, err := stream.CreateOrUpdateConsumer(ctx, opts.ConsumerConfig)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to create or update consumer %s", opts.ConsumerConfig.Name)
+		return nil, errorutil.Wrapf(err, "failed to create or update consumer %s", opts.ConsumerConfig.Name)
 	}
 
 	return newJetstreamConsumer(connector, consumer, opts.ReceiveWaitTimeOut), nil
 
 }
 
+func (c *jetstreamConnection) processStreamConfig(ctx context.Context, opts jetstream.StreamConfig) (jetstream.Stream, error) {
+
+	stream, err := c.jetStream.Stream(ctx, opts.Name)
+	if err != nil && !errors.Is(err, jetstream.ErrStreamNotFound) {
+		return nil, errorutil.Wrapf(err, "failed to get stream %s", opts.Name)
+	}
+
+	if stream == nil {
+		stream, err = c.jetStream.CreateOrUpdateStream(ctx, opts)
+		if err != nil {
+			return nil, errorutil.Wrapf(err, "failed to create or update stream %s", opts.Name)
+		}
+	}
+	return stream, nil
+}
+
 func (c *jetstreamConnection) DeleteSubscription(ctx context.Context, opts *SubscriptionOptions) error {
 	err := c.jetStream.DeleteConsumer(ctx, opts.StreamConfig.Name, opts.ConsumerConfig.Name)
 	if err != nil {
-		return errorutil.Wrapf(err, gcerrors.Internal, "failed to delete consumer %s from stream %s", opts.ConsumerConfig.Name, opts.StreamConfig.Name)
+		return errorutil.Wrapf(err, "failed to delete consumer %s from stream %s", opts.ConsumerConfig.Name, opts.StreamConfig.Name)
 	}
 	return nil
 }
@@ -134,7 +133,7 @@ func (t *jetstreamTopic) PublishMessage(ctx context.Context, msg *nats.Msg) (str
 
 	ack, err := t.jetStream.PublishMsg(ctx, msg)
 	if err != nil {
-		return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
+		return "", errorutil.Wrapf(err, "failed to publish message to subject %s", msg.Subject)
 	}
 	return createLoggableID(ack.Stream, ack.Sequence), nil
 }
@@ -188,7 +187,7 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 
 	// Check for context cancellation
 	if err := ctx.Err(); err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Canceled, "context canceled while setting up batch")
+		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
 	}
 
 	// Use Fetch to block for extended periods
@@ -197,9 +196,9 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 	if err != nil {
 		// Map connection-related errors
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
-			return nil, errorutil.Wrap(err, gcerrors.ResourceExhausted, "connection issue while setting up batch")
+			return nil, errorutil.Wrap(err, "connection issue while setting up batch")
 		}
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to setup fetch from consumer")
+		return nil, errorutil.Wrap(err, "failed to setup fetch from consumer")
 	}
 
 	jc.activeBatch = batch
@@ -217,7 +216,7 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 
 	activeBatch, err := jc.setupActiveBatch(ctx, batchCount, batchTimeout)
 	if err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "active batch is nil")
+		return nil, errorutil.Wrap(err, "active batch is nil")
 	}
 
 	for {
@@ -228,9 +227,9 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 				return messages, nil
 			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, errorutil.Wrap(ctx.Err(), gcerrors.DeadlineExceeded, "timeout while waiting for messages")
+				return nil, errorutil.Wrap(ctx.Err(), "timeout while waiting for messages")
 			}
-			return messages, errorutil.Wrap(ctx.Err(), gcerrors.Canceled, "context canceled while processing messages")
+			return messages, errorutil.Wrap(ctx.Err(), "context canceled while processing messages")
 
 		case msg, ok := <-activeBatch.Messages():
 			if !ok {
@@ -244,7 +243,7 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 			if err != nil {
 				// Clear the batch on error to allow retry on next call
 				jc.clearActiveBatch()
-				return messages, errorutil.Wrap(err, gcerrors.Internal, "batch fetch error")
+				return messages, errorutil.Wrap(err, "batch fetch error")
 			}
 
 			drvMsg, err0 := decodeJsMessage(msg)
@@ -267,7 +266,7 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 
 func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Canceled, "context canceled")
+		return nil, errorutil.Wrap(err, "context canceled")
 	}
 
 	if batchCount <= 0 {
@@ -335,7 +334,7 @@ func jsMessageAsFunc(msg jetstream.Msg) func(interface{}) bool {
 
 func decodeJsMessage(msg jetstream.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
+		return nil, errorutil.Wrap(nats.ErrInvalidMsg, "invalid message: nil message")
 	}
 
 	dm := &driver.Message{

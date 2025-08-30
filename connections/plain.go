@@ -26,7 +26,7 @@ var bufferPool = sync.Pool{
 func NewPlainWithEncodingV1(natsConn *nats.Conn, useV1Encoding bool) (Connection, error) {
 	sv, err := ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to parse server version: %s", natsConn.ConnectedServerVersion())
+		return nil, errorutil.Wrapf(err, "failed to parse server version: %s", natsConn.ConnectedServerVersion())
 	}
 
 	return newPlainConnection(natsConn, sv, useV1Encoding), nil
@@ -83,7 +83,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 		subsc, err := c.natsConnection.QueueSubscribeSync(opts.Subject, opts.ConsumerConfig.Durable)
 		if err != nil {
-			return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to subscribe to queue %s on subject %s",
+			return nil, errorutil.Wrapf(err, "failed to subscribe to queue %s on subject %s",
 				opts.ConsumerConfig.Durable, opts.Subject)
 		}
 
@@ -96,7 +96,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 	// loosing some messages is ok as this essentially is an atmost once delivery situation here.
 	subsc, err := c.natsConnection.SubscribeSync(opts.Subject)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "failed to subscribe to subject %s", opts.Subject)
+		return nil, errorutil.Wrapf(err, "failed to subscribe to subject %s", opts.Subject)
 	}
 
 	return &natsConsumer{consumer: subsc, isQueueGroup: false,
@@ -147,13 +147,13 @@ func (t *plainNatsTopic) PublishMessage(_ context.Context, msg *nats.Msg) (strin
 	if t.useV1Encoding {
 		err = t.plainConn.Publish(msg.Subject, msg.Data)
 		if err != nil {
-			return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
+			return "", errorutil.Wrapf(err, "failed to publish message to subject %s", msg.Subject)
 		}
 		return "", nil
 	}
 	err = t.plainConn.PublishMsg(msg)
 	if err != nil {
-		return "", errorutil.Wrapf(err, gcerrors.Internal, "failed to publish message to subject %s", msg.Subject)
+		return "", errorutil.Wrapf(err, "failed to publish message to subject %s", msg.Subject)
 	}
 	return "", nil
 }
@@ -214,7 +214,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 	for i := 0; i < batchCount; i++ {
 		// Check if context is done before attempting to fetch each message
 		if err := ctx.Err(); err != nil {
-			return messages, errorutil.Wrap(err, gcerrors.Canceled, "context canceled while receiving messages")
+			return messages, errorutil.Wrap(err, "context canceled while receiving messages")
 		}
 
 		// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
@@ -236,7 +236,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 				return messages, nil
 			}
 			// For other errors, stop and return the error
-			return messages, errorutil.Wrap(err, gcerrors.Internal, "error receiving message")
+			return messages, errorutil.Wrap(err, "error receiving message")
 		}
 
 		var driverMsg *driver.Message
@@ -247,7 +247,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		}
 
 		if err != nil {
-			return nil, errorutil.Wrap(err, gcerrors.Internal, "error decoding message")
+			return nil, errorutil.Wrap(err, "error decoding message")
 		}
 
 		messages = append(messages, driverMsg)
@@ -281,7 +281,7 @@ func messageAsFunc(msg *nats.Msg) func(interface{}) bool {
 
 func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
+		return nil, errorutil.New(gcerrors.InvalidArgument, "invalid message: nil message")
 	}
 
 	dm := &driver.Message{}
@@ -307,7 +307,7 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 	// Now decode the body
 	var body []byte
 	if err := dec.Decode(&body); err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to decode message body")
+		return nil, errorutil.Wrap(err, "failed to decode message body")
 	}
 	dm.Body = body
 
@@ -316,7 +316,7 @@ func decodeV1Message(msg *nats.Msg) (*driver.Message, error) {
 
 func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 	if msg == nil {
-		return nil, errorutil.Wrap(nats.ErrInvalidMsg, gcerrors.InvalidArgument, "invalid message: nil message")
+		return nil, errorutil.New(gcerrors.InvalidArgument, "invalid message: nil message")
 	}
 
 	dm := driver.Message{
@@ -358,10 +358,10 @@ func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
 	enc := gob.NewEncoder(&buf)
 	// Always encode metadata, even if empty - this ensures consistent message format
 	if err := enc.Encode(dm.Metadata); err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to encode message metadata")
+		return nil, errorutil.Wrap(err, "failed to encode message metadata")
 	}
 	if err := enc.Encode(dm.Body); err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "failed to encode message body")
+		return nil, errorutil.Wrap(err, "failed to encode message body")
 	}
 	return &nats.Msg{
 		Subject: sub,

@@ -140,15 +140,15 @@ func ServerVersion(version string) (*Version, error) {
 	)
 	major, err = strconv.Atoi(m[1])
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version major number %q", m[1])
+		return nil, errorutil.Newf(gcerrors.InvalidArgument, "failed to parse server version major number %q [%s]", m[1], err.Error())
 	}
 	minor, err = strconv.Atoi(m[2])
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version minor number %q", m[2])
+		return nil, errorutil.Newf(gcerrors.InvalidArgument, "failed to parse server version minor number %q [%s]", m[2], err.Error())
 	}
 	patch, err = strconv.Atoi(m[3])
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.InvalidArgument, "failed to parse server version patch number %q", m[3])
+		return nil, errorutil.Newf(gcerrors.InvalidArgument, "failed to parse server version patch number %q [%s]", m[3], err.Error())
 	}
 	return &Version{Major: major, Minor: minor, Patch: patch}, nil
 }

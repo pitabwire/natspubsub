@@ -168,12 +168,12 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnabled bool, useV1Encoding bool) (connections.Connection, error) {
 	natsConn, err := nats.Connect(connectionUrl)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.FailedPrecondition, "failed to dial server using %q", connectionUrl)
+		return nil, errorutil.Wrapf(err, "failed to dial server using %q", connectionUrl)
 	}
 
 	sv, err := connections.ServerVersion(natsConn.ConnectedServerVersion())
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, " failed to parse NATS server version %q", natsConn.ConnectedServerVersion())
+		return nil, errorutil.Wrapf(err, " failed to parse NATS server version %q", natsConn.ConnectedServerVersion())
 	}
 
 	var conn connections.Connection
@@ -185,7 +185,7 @@ func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnable
 	}
 
 	if err != nil {
-		return nil, errorutil.Wrap(err, gcerrors.Internal, "natspubsub: failed to create connection")
+		return nil, errorutil.Wrap(err, "natspubsub: failed to create connection")
 	}
 
 	return conn, nil
@@ -221,7 +221,7 @@ func (o *defaultDialer) featureIsEnabledViaUrl(q url.Values, key string) bool {
 func (o *defaultDialer) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.Topic, error) {
 	opener, err := o.defaultConn(ctx, u)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "open topic %v: failed to open default connection", u)
+		return nil, errorutil.Wrapf(err, "open topic %v: failed to open default connection", u)
 	}
 	return opener.OpenTopicURL(ctx, u)
 }
@@ -229,7 +229,7 @@ func (o *defaultDialer) OpenTopicURL(ctx context.Context, u *url.URL) (*pubsub.T
 func (o *defaultDialer) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsub.Subscription, error) {
 	opener, err := o.defaultConn(ctx, u)
 	if err != nil {
-		return nil, errorutil.Wrapf(err, gcerrors.Internal, "open subscription %v: failed to open default connection", u)
+		return nil, errorutil.Wrapf(err, "open subscription %v: failed to open default connection", u)
 	}
 	return opener.OpenSubscriptionURL(ctx, u)
 }
@@ -617,7 +617,6 @@ func (t *topic) ErrorAs(error, interface{}) bool {
 
 // ErrorCode implements driver.Conn.ErrorCode
 func (t *topic) ErrorCode(err error) gcerrors.ErrorCode {
-
 	// Use our error mapping function for all other cases
 	return errorutil.MapErrorCode(err)
 }
@@ -667,14 +666,14 @@ func openSubscription(ctx context.Context, connector connections.Connector, opts
 
 	// Get URL and opener from conn if possible
 	var opener *URLOpener
-	var url string
+	var subscriptionURL string
 
 	// Try to extract the opener from the connection context if available
-	if conn, ok := conn.(interface{ GetOpenerInfo() (*URLOpener, string) }); ok {
-		opener, url = conn.GetOpenerInfo()
+	if subscriptionConn, ok := conn.(interface{ GetOpenerInfo() (*URLOpener, string) }); ok {
+		opener, subscriptionURL = subscriptionConn.GetOpenerInfo()
 	}
 
-	return &subscription{queue: q, opener: opener, url: url}, nil
+	return &subscription{queue: q, opener: opener, url: subscriptionURL}, nil
 }
 
 // ReceiveBatch implements driver.ReceiveBatch.
