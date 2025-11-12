@@ -91,6 +91,10 @@ for the scheme "nats".
 The default URL opener will connect to a default server based on the
 environment variable "NATS_SERVER_URL".
 
+Authentication can be configured using the environment variable "NATS_CREDENTIALS_FILE".
+If this variable is set to a path to a NATS credentials file, the client will automatically
+use those credentials for authentication when connecting to the NATS server.
+
 This implementation supports all versions of NATS Servers, we however recommend version 2.2.0 or later.
 Messages can be encoded using native NATS message headers, and native message content
 providing full support for non-Go clients. Operating in this manner is  more 
