@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -166,7 +167,14 @@ func (o *defaultDialer) defaultConn(_ context.Context, serverUrl *url.URL) (*URL
 }
 
 func (o *defaultDialer) createConnection(connectionUrl string, isJetstreamEnabled bool, useV1Encoding bool) (connections.Connection, error) {
-	natsConn, err := nats.Connect(connectionUrl)
+
+	var options []nats.Option
+	credentials := os.Getenv("NATS_CREDENTIALS_FILE")
+	if credentials != "" {
+		options = append(options, nats.UserCredentials(credentials))
+	}
+
+	natsConn, err := nats.Connect(connectionUrl, options...)
 	if err != nil {
 		return nil, errorutil.Wrapf(err, "failed to dial server using %q", connectionUrl)
 	}
