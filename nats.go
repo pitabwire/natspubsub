@@ -54,7 +54,6 @@ const (
 	QueryParamSubject               = "subject"
 	QueryParamHeaderToExtendSubject = "header_to_extended_subject"
 	QueryParamReceiveWaitTimeout    = "receive_wait_timeout"
-	DefaultReceiveWaitTimeout       = 30 * time.Second
 
 	ReceiveBatchConfigPrefix = "receive_batch_"
 	AckBatchConfigPrefix     = "ack_batch_"
@@ -443,7 +442,7 @@ func (o *URLOpener) OpenSubscriptionURL(ctx context.Context, u *url.URL) (*pubsu
 
 	opts.ReceiveWaitTimeOut, err = time.ParseDuration(queryParams.Get(QueryParamReceiveWaitTimeout))
 	if err != nil {
-		opts.ReceiveWaitTimeOut = DefaultReceiveWaitTimeout
+		opts.ReceiveWaitTimeOut = 0
 	}
 
 	streamMap := make(map[string]any)
