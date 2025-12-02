@@ -191,15 +191,9 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
 	}
 
-	var batch jetstream.MessageBatch
-
 	// Use Fetch to block for extended periods
 	// This provides better behaviour when there are no messages available
-	if batchTimeout > 0 {
-		batch, err = jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
-	} else {
-		batch, err = jc.consumer.Fetch(batchCount, jetstream.FetchContext(ctx))
-	}
+	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		// Map connection-related errors
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {

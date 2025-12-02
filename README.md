@@ -147,7 +147,7 @@ Comprehensive definitions of the options can be found below. These are based on 
 |------------|---------------|---------------------------------------------------------------------------------------------------------------------|
 | jetstream  | true          | Enables JetStream functionality for at-least-once delivery semantics                                                |
 | subject    |               | A string of characters that form a name which the publisher and subscriber can use to find each other               |
-| receive_wait_timeout    | 0             | A timeout for the receive operation. If set to 0, the receive operation will block indefinitely until context ends. |
+| receive_wait_timeout    | 5m            | A timeout for the receive operation. If set to 0, the receive operation will block indefinitely until context ends. |
 
 ## Stream Configuration Parameters
 
