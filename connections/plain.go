@@ -88,7 +88,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 		}
 
 		return &natsConsumer{consumer: subsc, isQueueGroup: true,
-			batchFetchTimeout: opts.ConsumerConfig.MaxRequestExpires,
+			batchFetchTimeout: opts.ReceiveWaitTimeOut,
 			useV1Decoding:     useV1Decoding}, nil
 	}
 
@@ -100,7 +100,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 	}
 
 	return &natsConsumer{consumer: subsc, isQueueGroup: false,
-		batchFetchTimeout: opts.ConsumerConfig.MaxRequestExpires,
+		batchFetchTimeout: opts.ReceiveWaitTimeOut,
 		useV1Decoding:     useV1Decoding, connector: connector}, nil
 
 }
@@ -195,17 +195,20 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		batchCount = 1
 	}
 
-	// Use the context's deadline if available, otherwise fall back to the configured timeout
+	// Use the context's deadline if available, otherwise fall back to the configured timeout.
+	// A fetchTimeout of 0 means "wait indefinitely until the context ends".
 	fetchTimeout := q.batchFetchTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		// Use the remaining time from the context, but don't exceed our configured timeout
-		remainingTime := time.Until(deadline)
-		if remainingTime < fetchTimeout {
-			fetchTimeout = remainingTime
-		}
-		// Ensure we have at least a minimal timeout to prevent spinning
-		if fetchTimeout <= 0 {
-			fetchTimeout = time.Millisecond
+	if fetchTimeout > 0 {
+		if deadline, ok := ctx.Deadline(); ok {
+			// Use the remaining time from the context, but don't exceed our configured timeout
+			remainingTime := time.Until(deadline)
+			if remainingTime < fetchTimeout {
+				fetchTimeout = remainingTime
+			}
+			// Ensure we have at least a minimal timeout to prevent spinning
+			if fetchTimeout <= 0 {
+				fetchTimeout = time.Millisecond
+			}
 		}
 	}
 
@@ -217,20 +220,32 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 			return messages, errorutil.Wrap(err, "context canceled while receiving messages")
 		}
 
-		// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
-		attemptTimeout := fetchTimeout
-		if i > 0 {
-			// Use progressively shorter timeouts for subsequent messages
-			// This enables quick return when no more messages are available
-			attemptTimeout = fetchTimeout / time.Duration(i*2+1)
+		var (
+			msg *nats.Msg
+			err error
+		)
+
+		if fetchTimeout == 0 && i == 0 {
+			// Block until a message arrives or the context ends.
+			msg, err = q.consumer.NextMsgWithContext(ctx)
+		} else {
+			// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
+			attemptTimeout := fetchTimeout
+			if fetchTimeout == 0 {
+				attemptTimeout = time.Millisecond
+			} else if i > 0 {
+				// Use progressively shorter timeouts for subsequent messages
+				// This enables quick return when no more messages are available
+				attemptTimeout = fetchTimeout / time.Duration(i*2+1)
+			}
 			if attemptTimeout < time.Millisecond {
 				attemptTimeout = time.Millisecond
 			}
-		}
 
-		msg, err := q.consumer.NextMsg(attemptTimeout)
+			msg, err = q.consumer.NextMsg(attemptTimeout)
+		}
 		if err != nil {
-			// Not an error if we timeout or context is cancelled
+			// Not an error if we timeout
 			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 				// Just return what we have so far
 				return messages, nil
