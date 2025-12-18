@@ -124,6 +124,11 @@ func (t *jetstreamTopic) As(i any) bool {
 		return true
 	}
 
+	if p, ok := i.(**nats.Conn); ok {
+		*p = t.jetStream.Conn()
+		return true
+	}
+
 	return false
 }
 
@@ -187,6 +192,15 @@ func (jc *jetstreamConsumer) As(i any) bool {
 	if p, ok := i.(*jetstream.JetStream); ok {
 		if jsConn, ok := jc.connector.Connection().(*jetstreamConnection); ok {
 			*p = jsConn.jetStream
+			return true
+		}
+		return false
+	}
+
+	if p, ok := i.(**nats.Conn); ok {
+		if jsConn, ok := jc.connector.Connection().(*jetstreamConnection); ok {
+			natsConn := jsConn.jetStream.Conn()
+			*p = natsConn
 			return true
 		}
 		return false
