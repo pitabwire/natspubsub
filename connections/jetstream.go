@@ -245,17 +245,19 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
 	}
 
-	// Acquire write lock for batch creation
+	// Acquire write lock for the entire batch creation process to prevent
+	// multiple goroutines from calling Fetch() concurrently (which would
+	// cause duplicate batches and lost messages)
 	jc.mu.Lock()
+	defer jc.mu.Unlock()
+
 	// Double-check after acquiring write lock
 	if jc.activeBatch != nil {
-		batch := jc.activeBatch
-		jc.mu.Unlock()
-		return batch, nil
+		return jc.activeBatch, nil
 	}
-	jc.mu.Unlock()
 
-	// Perform fetch outside the lock to avoid blocking other goroutines
+	// Perform fetch while holding lock - this blocks other receivers but
+	// prevents the race condition of multiple concurrent Fetch() calls
 	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
@@ -264,7 +266,7 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 		return nil, errorutil.Wrap(err, "failed to setup fetch from consumer")
 	}
 
-	jc.setActiveBatch(batch)
+	jc.activeBatch = batch
 	return batch, nil
 }
 

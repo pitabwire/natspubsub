@@ -241,6 +241,8 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		batchCount = 1
 	}
 
+	// Use the context's deadline if available, otherwise fall back to the configured timeout.
+	// A fetchTimeout of 0 means "wait indefinitely until the context ends".
 	messages := make([]*driver.Message, 0, batchCount)
 
 	// Calculate effective timeout respecting context deadline
@@ -270,20 +272,22 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		)
 
 		if fetchTimeout == 0 && i == 0 {
+			// Block until a message arrives or the context ends.
 			msg, err = q.consumer.NextMsgWithContext(ctx)
 		} else {
-			// First message uses full timeout; subsequent use short poll
+			// First message uses full timeout; subsequent messages use short fixed timeout
+			// to quickly detect when no more messages are available without busy-looping
 			attemptTimeout := fetchTimeout
-			if i > 0 {
+			if fetchTimeout == 0 {
+				attemptTimeout = subsequentTimeout
+			} else if i > 0 {
 				attemptTimeout = subsequentTimeout
 			}
-			if attemptTimeout < minFetchTimeout {
-				attemptTimeout = minFetchTimeout
-			}
+
 			msg, err = q.consumer.NextMsg(attemptTimeout)
 		}
-
 		if err != nil {
+			// Not an error if we timeout
 			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 				return messages, nil
 			}
