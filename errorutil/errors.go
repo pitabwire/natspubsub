@@ -28,7 +28,7 @@ func New(c gcerrors.ErrorCode, msg string) *Error {
 }
 
 // Newf creates a new Error with the given code, underlying error, and formatted message.
-func Newf(c gcerrors.ErrorCode, format string, args ...interface{}) *Error {
+func Newf(c gcerrors.ErrorCode, format string, args ...any) *Error {
 	return &Error{code: c, msg: fmt.Sprintf(format, args...)}
 }
 

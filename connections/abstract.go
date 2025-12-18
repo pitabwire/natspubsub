@@ -84,6 +84,7 @@ type Queue interface {
 	CanNack() bool
 	Nack(ctx context.Context, ids []driver.AckID) error
 	Close() error
+	As(i any) bool
 }
 
 type Topic interface {
@@ -91,6 +92,7 @@ type Topic interface {
 	Subject() string
 	PublishMessage(ctx context.Context, msg *nats.Msg) (string, error)
 	Close() error
+	As(i any) bool
 }
 
 type Connection interface {
