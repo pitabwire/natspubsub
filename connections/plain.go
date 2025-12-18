@@ -18,7 +18,7 @@ import (
 
 // bufferPool provides reusable byte buffers for encoding/decoding operations
 var bufferPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return new(bytes.Buffer)
 	},
 }
@@ -59,7 +59,7 @@ func (c *plainConnection) Close() error {
 
 }
 
-func (c *plainConnection) Raw() interface{} {
+func (c *plainConnection) Raw() any {
 	return c.natsConnection
 }
 
@@ -89,7 +89,7 @@ func (c *plainConnection) CreateSubscription(ctx context.Context, opts *Subscrip
 
 		return &natsConsumer{consumer: subsc, isQueueGroup: true,
 			batchFetchTimeout: opts.ReceiveWaitTimeOut,
-			useV1Decoding:     useV1Decoding}, nil
+			useV1Decoding:     useV1Decoding, connector: connector}, nil
 	}
 
 	// Using nats without any form of queue mechanism is fine only where
@@ -115,6 +115,25 @@ type plainNatsTopic struct {
 	plainConn        *nats.Conn
 	useV1Encoding    bool
 	connector        Connector
+}
+
+func (t *plainNatsTopic) As(i any) bool {
+	if p, ok := i.(*Connector); ok {
+		*p = t.connector
+		return true
+	}
+
+	if p, ok := i.(*Connection); ok {
+		*p = t.connector.Connection()
+		return true
+	}
+
+	if p, ok := i.(**nats.Conn); ok {
+		*p = t.plainConn
+		return true
+	}
+
+	return false
 }
 
 func (t *plainNatsTopic) Close() error {
@@ -166,6 +185,31 @@ type natsConsumer struct {
 	connector         Connector
 }
 
+func (q *natsConsumer) As(i any) bool {
+
+	if p, ok := i.(**nats.Subscription); ok {
+		*p = q.consumer
+		return true
+	}
+
+	if p, ok := i.(**nats.Conn); ok {
+		*p = q.connector.Connection().(*plainConnection).natsConnection
+		return true
+	}
+
+	if p, ok := i.(*Connector); ok {
+		*p = q.connector
+		return true
+	}
+
+	if p, ok := i.(*Connection); ok {
+		*p = q.connector.Connection()
+		return true
+	}
+
+	return false
+}
+
 func (q *natsConsumer) Close() error {
 
 	if q == nil || q.connector == nil {
@@ -187,37 +231,37 @@ func (q *natsConsumer) Unsubscribe() error {
 	return q.consumer.Unsubscribe()
 }
 
-func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
-	// Pre-allocate message slice with capacity of batchCount to reduce allocations
-	messages := make([]*driver.Message, 0, batchCount)
+const (
+	minFetchTimeout   = time.Millisecond
+	subsequentTimeout = 10 * time.Millisecond
+)
 
+func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*driver.Message, error) {
 	if batchCount <= 0 {
 		batchCount = 1
 	}
 
-	// Use the context's deadline if available, otherwise fall back to the configured timeout.
-	// A fetchTimeout of 0 means "wait indefinitely until the context ends".
+	messages := make([]*driver.Message, 0, batchCount)
+
+	// Calculate effective timeout respecting context deadline
 	fetchTimeout := q.batchFetchTimeout
 	if fetchTimeout > 0 {
 		if deadline, ok := ctx.Deadline(); ok {
-			// Use the remaining time from the context, but don't exceed our configured timeout
-			remainingTime := time.Until(deadline)
-			if remainingTime < fetchTimeout {
-				fetchTimeout = remainingTime
+			if remaining := time.Until(deadline); remaining < fetchTimeout {
+				fetchTimeout = remaining
 			}
-			// Ensure we have at least a minimal timeout to prevent spinning
-			if fetchTimeout <= 0 {
-				fetchTimeout = time.Millisecond
+			if fetchTimeout < minFetchTimeout {
+				fetchTimeout = minFetchTimeout
 			}
 		}
 	}
 
-	// Try to fetch up to batchCount messages without blocking too long on any single message
-	// This helps prevent deadlocks while still attempting to fill the batch
 	for i := 0; i < batchCount; i++ {
-		// Check if context is done before attempting to fetch each message
 		if err := ctx.Err(); err != nil {
-			return messages, errorutil.Wrap(err, "context canceled while receiving messages")
+			if len(messages) > 0 {
+				return messages, nil
+			}
+			return nil, errorutil.Wrap(err, "context canceled while receiving messages")
 		}
 
 		var (
@@ -226,32 +270,27 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		)
 
 		if fetchTimeout == 0 && i == 0 {
-			// Block until a message arrives or the context ends.
 			msg, err = q.consumer.NextMsgWithContext(ctx)
 		} else {
-			// Calculate timeout for this fetch attempt (use shorter timeouts for subsequent messages)
+			// First message uses full timeout; subsequent use short poll
 			attemptTimeout := fetchTimeout
-			if fetchTimeout == 0 {
-				attemptTimeout = time.Millisecond
-			} else if i > 0 {
-				// Use progressively shorter timeouts for subsequent messages
-				// This enables quick return when no more messages are available
-				attemptTimeout = fetchTimeout / time.Duration(i*2+1)
+			if i > 0 {
+				attemptTimeout = subsequentTimeout
 			}
-			if attemptTimeout < time.Millisecond {
-				attemptTimeout = time.Millisecond
+			if attemptTimeout < minFetchTimeout {
+				attemptTimeout = minFetchTimeout
 			}
-
 			msg, err = q.consumer.NextMsg(attemptTimeout)
 		}
+
 		if err != nil {
-			// Not an error if we timeout
 			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
-				// Just return what we have so far
 				return messages, nil
 			}
-			// For other errors, stop and return the error
-			return messages, errorutil.Wrap(err, "error receiving message")
+			if len(messages) > 0 {
+				return messages, nil
+			}
+			return nil, errorutil.Wrap(err, "error receiving message")
 		}
 
 		var driverMsg *driver.Message
@@ -262,7 +301,7 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 		}
 
 		if err != nil {
-			return nil, errorutil.Wrap(err, "error decoding message")
+			return messages, errorutil.Wrap(err, "error decoding message")
 		}
 
 		messages = append(messages, driverMsg)
@@ -283,7 +322,7 @@ func (q *natsConsumer) Nack(_ context.Context, _ []driver.AckID) error {
 	return nil
 }
 
-func messageAsFunc(msg *nats.Msg) func(interface{}) bool {
+func messageAsFunc(msg *nats.Msg) func(any) bool {
 	return func(i any) bool {
 		p, ok := i.(**nats.Msg)
 		if !ok {
@@ -368,21 +407,28 @@ func decodeMessage(msg *nats.Msg) (*driver.Message, error) {
 }
 
 func encodeV1Message(dm *driver.Message, sub string) (*nats.Msg, error) {
+	buf := bufferPool.Get().(*bytes.Buffer)
+	buf.Reset()
 
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	// Always encode metadata, even if empty - this ensures consistent message format
+	enc := gob.NewEncoder(buf)
 	if err := enc.Encode(dm.Metadata); err != nil {
+		bufferPool.Put(buf)
 		return nil, errorutil.Wrap(err, "failed to encode message metadata")
 	}
 	if err := enc.Encode(dm.Body); err != nil {
+		bufferPool.Put(buf)
 		return nil, errorutil.Wrap(err, "failed to encode message body")
 	}
+
+	// Copy data before returning buffer to pool
+	data := make([]byte, buf.Len())
+	copy(data, buf.Bytes())
+	bufferPool.Put(buf)
+
 	return &nats.Msg{
 		Subject: sub,
-		Data:    buf.Bytes(),
+		Data:    data,
 	}, nil
-
 }
 
 func encodeMessage(dm *driver.Message, sub string) (*nats.Msg, error) {

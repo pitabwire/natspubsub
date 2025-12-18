@@ -291,7 +291,7 @@ func (plainNatsAsTest) MessageCheck(m *pubsub.Message) error {
 	return nil
 }
 
-func (n plainNatsAsTest) BeforeSend(as func(interface{}) bool) error {
+func (n plainNatsAsTest) BeforeSend(as func(any) bool) error {
 	var pm *nats.Msg
 	if as(pm) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &pm)
@@ -304,7 +304,7 @@ func (n plainNatsAsTest) BeforeSend(as func(interface{}) bool) error {
 	return nil
 }
 
-func (plainNatsAsTest) AfterSend(as func(interface{}) bool) error {
+func (plainNatsAsTest) AfterSend(as func(any) bool) error {
 	return nil
 }
 
@@ -348,7 +348,7 @@ func (jetstreamAsTest) MessageCheck(m *pubsub.Message) error {
 	return nil
 }
 
-func (n jetstreamAsTest) BeforeSend(as func(interface{}) bool) error {
+func (n jetstreamAsTest) BeforeSend(as func(any) bool) error {
 	var pm nats.Msg
 	if as(pm) {
 		return fmt.Errorf("cast succeeded for %T, want failure", &pm)

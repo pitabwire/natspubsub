@@ -45,7 +45,7 @@ func (c *jetstreamConnection) Close() error {
 	return nil
 }
 
-func (c *jetstreamConnection) Raw() interface{} {
+func (c *jetstreamConnection) Raw() any {
 	return c.jetStream
 }
 
@@ -108,6 +108,25 @@ type jetstreamTopic struct {
 	connector        Connector
 }
 
+func (t *jetstreamTopic) As(i any) bool {
+	if p, ok := i.(*Connector); ok {
+		*p = t.connector
+		return true
+	}
+
+	if p, ok := i.(*Connection); ok {
+		*p = t.connector.Connection()
+		return true
+	}
+
+	if p, ok := i.(*jetstream.JetStream); ok {
+		*p = t.jetStream
+		return true
+	}
+
+	return false
+}
+
 func (t *jetstreamTopic) Close() error {
 	// Nothing to close for the jetstreamTopic as the underlying JetStream connection
 	// is managed by the jetstreamConnection and should be closed there
@@ -143,9 +162,34 @@ type jetstreamConsumer struct {
 
 	consumer    jetstream.Consumer
 	activeBatch jetstream.MessageBatch
-	mu          sync.Mutex
+	mu          sync.RWMutex
 
 	pullWaitTimeout time.Duration
+}
+
+func (jc *jetstreamConsumer) As(i any) bool {
+
+	if p, ok := i.(*Connector); ok {
+		*p = jc.connector
+		return true
+	}
+
+	if p, ok := i.(*Connection); ok {
+		*p = jc.connector.Connection()
+		return true
+	}
+
+	if p, ok := i.(*jetstream.Consumer); ok {
+		*p = jc.consumer
+		return true
+	}
+
+	if p, ok := i.(*jetstream.JetStream); ok {
+		*p = jc.connector.Connection().(*jetstreamConnection).jetStream
+		return true
+	}
+
+	return false
 }
 
 func newJetstreamConsumer(connector Connector, consumer jetstream.Consumer, pullWaitTimeout time.Duration) *jetstreamConsumer {
@@ -177,39 +221,55 @@ func (jc *jetstreamConsumer) Unsubscribe() error {
 	return nil
 }
 
-func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount int, batchTimeout time.Duration) (jetstream.MessageBatch, error) {
-	jc.mu.Lock()
-	defer jc.mu.Unlock()
+func (jc *jetstreamConsumer) getActiveBatch() jetstream.MessageBatch {
+	jc.mu.RLock()
+	batch := jc.activeBatch
+	jc.mu.RUnlock()
+	return batch
+}
 
-	if jc.activeBatch != nil {
-		return jc.activeBatch, nil
+func (jc *jetstreamConsumer) setActiveBatch(batch jetstream.MessageBatch) {
+	jc.mu.Lock()
+	jc.activeBatch = batch
+	jc.mu.Unlock()
+}
+
+func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount int, batchTimeout time.Duration) (jetstream.MessageBatch, error) {
+	// Fast path: check if we already have an active batch without write lock
+	if batch := jc.getActiveBatch(); batch != nil {
+		return batch, nil
 	}
 
-	// Check for context cancellation
-	err := ctx.Err()
-	if err != nil {
+	// Check for context cancellation before expensive operations
+	if err := ctx.Err(); err != nil {
 		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
 	}
 
-	// Use Fetch to block for extended periods
-	// This provides better behaviour when there are no messages available
+	// Acquire write lock for batch creation
+	jc.mu.Lock()
+	// Double-check after acquiring write lock
+	if jc.activeBatch != nil {
+		batch := jc.activeBatch
+		jc.mu.Unlock()
+		return batch, nil
+	}
+	jc.mu.Unlock()
+
+	// Perform fetch outside the lock to avoid blocking other goroutines
 	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
-		// Map connection-related errors
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
 			return nil, errorutil.Wrap(err, "connection issue while setting up batch")
 		}
 		return nil, errorutil.Wrap(err, "failed to setup fetch from consumer")
 	}
 
-	jc.activeBatch = batch
-	return jc.activeBatch, nil
+	jc.setActiveBatch(batch)
+	return batch, nil
 }
 
 func (jc *jetstreamConsumer) clearActiveBatch() {
-	jc.mu.Lock()
-	jc.activeBatch = nil
-	jc.mu.Unlock()
+	jc.setActiveBatch(nil)
 }
 
 func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, batchTimeout time.Duration) ([]*driver.Message, error) {
@@ -287,10 +347,9 @@ func (jc *jetstreamConsumer) ReceiveMessages(ctx context.Context, batchCount int
 }
 
 func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error {
-
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return nil
+			return errorutil.Wrap(err, "context canceled during ack")
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -298,17 +357,17 @@ func (jc *jetstreamConsumer) Ack(ctx context.Context, ids []driver.AckID) error 
 			continue
 		}
 
+		// Ack errors are typically non-fatal (e.g., double-ack, connection issues)
+		// and the gocloud.dev pubsub interface expects idempotent ack behaviour
 		_ = msg.Ack()
 	}
-
 	return nil
 }
 
 func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error {
-
 	for _, id := range ids {
 		if err := ctx.Err(); err != nil {
-			return nil
+			return errorutil.Wrap(err, "context canceled during nack")
 		}
 
 		msg, ok := id.(jetstream.Msg)
@@ -316,14 +375,15 @@ func (jc *jetstreamConsumer) Nack(ctx context.Context, ids []driver.AckID) error
 			continue
 		}
 
+		// Nack errors are typically non-fatal (e.g., already acked/nacked)
+		// and the gocloud.dev pubsub interface expects idempotent behaviour
 		_ = msg.Nak()
 	}
-
 	return nil
 }
 
-func jsMessageAsFunc(msg jetstream.Msg) func(interface{}) bool {
-	return func(i interface{}) bool {
+func jsMessageAsFunc(msg jetstream.Msg) func(any) bool {
+	return func(i any) bool {
 		if p, ok := i.(*jetstream.Msg); ok {
 			*p = msg
 			return true
