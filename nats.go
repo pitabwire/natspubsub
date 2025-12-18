@@ -609,17 +609,17 @@ func (t *topic) sendMessage(ctx context.Context, m *driver.Message) error {
 func (t *topic) IsRetryable(error) bool { return false }
 
 // As implements driver.Conn.As.
-func (t *topic) As(i interface{}) bool {
+func (t *topic) As(i any) bool {
 	c, ok := i.(*connections.Topic)
 	if !ok {
-		return false
+		return t.iTopic.As(i)
 	}
 	*c = t.iTopic
 	return true
 }
 
 // ErrorAs implements driver.Conn.ErrorAs
-func (t *topic) ErrorAs(error, interface{}) bool {
+func (t *topic) ErrorAs(error, any) bool {
 	return false
 }
 
@@ -717,19 +717,19 @@ func (s *subscription) SendNacks(ctx context.Context, ids []driver.AckID) error 
 func (s *subscription) IsRetryable(error) bool { return false }
 
 // As implements driver.Subscription.As.
-func (s *subscription) As(i interface{}) bool {
+func (s *subscription) As(i any) bool {
 
 	if p, ok := i.(*connections.Queue); ok {
 		*p = s.queue
 		return true
 	}
 
-	return false
+	return s.queue.As(i)
 
 }
 
 // ErrorAs implements driver.Subscription.ErrorAs
-func (*subscription) ErrorAs(error, interface{}) bool {
+func (*subscription) ErrorAs(error, any) bool {
 	return false
 }
 
