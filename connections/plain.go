@@ -193,8 +193,11 @@ func (q *natsConsumer) As(i any) bool {
 	}
 
 	if p, ok := i.(**nats.Conn); ok {
-		*p = q.connector.Connection().(*plainConnection).natsConnection
-		return true
+		if plainConn, ok := q.connector.Connection().(*plainConnection); ok {
+			*p = plainConn.natsConnection
+			return true
+		}
+		return false
 	}
 
 	if p, ok := i.(*Connector); ok {
@@ -291,10 +294,9 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 			if errors.Is(err, nats.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 				return messages, nil
 			}
-			if len(messages) > 0 {
-				return messages, nil
-			}
-			return nil, errorutil.Wrap(err, "error receiving message")
+			// Return any messages we have along with the error to signal unhealthy source
+			// per gocloud.dev/pubsub/driver ReceiveBatch semantics
+			return messages, errorutil.Wrap(err, "error receiving message")
 		}
 
 		var driverMsg *driver.Message

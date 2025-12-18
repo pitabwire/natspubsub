@@ -185,8 +185,11 @@ func (jc *jetstreamConsumer) As(i any) bool {
 	}
 
 	if p, ok := i.(*jetstream.JetStream); ok {
-		*p = jc.connector.Connection().(*jetstreamConnection).jetStream
-		return true
+		if jsConn, ok := jc.connector.Connection().(*jetstreamConnection); ok {
+			*p = jsConn.jetStream
+			return true
+		}
+		return false
 	}
 
 	return false
@@ -235,29 +238,25 @@ func (jc *jetstreamConsumer) setActiveBatch(batch jetstream.MessageBatch) {
 }
 
 func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount int, batchTimeout time.Duration) (jetstream.MessageBatch, error) {
-	// Fast path: check if we already have an active batch without write lock
+	// Fast path: check if we already have an active batch with a read lock.
 	if batch := jc.getActiveBatch(); batch != nil {
 		return batch, nil
 	}
 
-	// Check for context cancellation before expensive operations
-	if err := ctx.Err(); err != nil {
-		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
-	}
-
-	// Acquire write lock for the entire batch creation process to prevent
-	// multiple goroutines from calling Fetch() concurrently (which would
-	// cause duplicate batches and lost messages)
+	// Acquire a write lock to create the batch.
 	jc.mu.Lock()
 	defer jc.mu.Unlock()
 
-	// Double-check after acquiring write lock
+	// Double-check after acquiring the write lock in case another goroutine created it.
 	if jc.activeBatch != nil {
 		return jc.activeBatch, nil
 	}
 
-	// Perform fetch while holding lock - this blocks other receivers but
-	// prevents the race condition of multiple concurrent Fetch() calls
+	// Check for context cancellation before the blocking call.
+	if err := ctx.Err(); err != nil {
+		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
+	}
+
 	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
@@ -267,7 +266,7 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 	}
 
 	jc.activeBatch = batch
-	return batch, nil
+	return jc.activeBatch, nil
 }
 
 func (jc *jetstreamConsumer) clearActiveBatch() {
@@ -285,13 +284,12 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 	for {
 		select {
 		case <-ctx.Done():
-			// If we already have messages, return them instead of error
-			if len(messages) > 0 {
+			// Timeout is not an error - return messages collected so far
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return messages, nil
 			}
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return nil, errorutil.Wrap(ctx.Err(), "timeout while waiting for messages")
-			}
+			// Return messages along with cancellation error to signal unhealthy source
+			// per gocloud.dev/pubsub/driver ReceiveBatch semantics
 			return messages, errorutil.Wrap(ctx.Err(), "context canceled while processing messages")
 
 		case msg, ok := <-activeBatch.Messages():
