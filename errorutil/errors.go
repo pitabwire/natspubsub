@@ -46,7 +46,9 @@ func Wrap(err error, msg string) error {
 	}
 	var e *Error
 	if errors.As(err, &e) {
-		return e
+		// Preserve the original error code but chain the new context message
+		// so callers can see the full wrapping path.
+		return New(e.code, fmt.Sprintf("%s : %s", msg, e.msg))
 	}
 
 	errCode := MapErrorCode(err)

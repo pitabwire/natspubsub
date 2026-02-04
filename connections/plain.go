@@ -263,10 +263,14 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 
 	for i := 0; i < batchCount; i++ {
 		if err := ctx.Err(); err != nil {
-			if len(messages) > 0 {
+			// Timeout is not an error - return messages collected so far
+			if errors.Is(err, context.DeadlineExceeded) {
 				return messages, nil
 			}
-			return nil, errorutil.Wrap(err, "context canceled while receiving messages")
+			// Cancellation signals an unhealthy source. Return any collected
+			// messages along with the error, consistent with JetStream behaviour
+			// and gocloud.dev/pubsub/driver ReceiveBatch semantics.
+			return messages, errorutil.Wrap(err, "context canceled while receiving messages")
 		}
 
 		var (
@@ -281,13 +285,15 @@ func (q *natsConsumer) ReceiveMessages(ctx context.Context, batchCount int) ([]*
 			// First message uses full timeout; subsequent messages use short fixed timeout
 			// to quickly detect when no more messages are available without busy-looping
 			attemptTimeout := fetchTimeout
-			if fetchTimeout == 0 {
-				attemptTimeout = subsequentTimeout
-			} else if i > 0 {
+			if fetchTimeout == 0 || i > 0 {
 				attemptTimeout = subsequentTimeout
 			}
 
-			msg, err = q.consumer.NextMsg(attemptTimeout)
+			// Use a derived context so that parent cancellation immediately interrupts
+			// the blocking call, rather than waiting for the full timeout to expire.
+			fetchCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+			msg, err = q.consumer.NextMsgWithContext(fetchCtx)
+			cancel()
 		}
 		if err != nil {
 			// Not an error if we timeout

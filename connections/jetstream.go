@@ -257,20 +257,21 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 		return batch, nil
 	}
 
-	// Acquire a write lock to create the batch.
+	// Check under write lock whether another goroutine already created the batch.
 	jc.mu.Lock()
-	defer jc.mu.Unlock()
-
-	// Double-check after acquiring the write lock in case another goroutine created it.
 	if jc.activeBatch != nil {
-		return jc.activeBatch, nil
+		batch := jc.activeBatch
+		jc.mu.Unlock()
+		return batch, nil
 	}
+	jc.mu.Unlock()
 
-	// Check for context cancellation before the blocking call.
+	// Check for context cancellation before the potentially blocking call.
 	if err := ctx.Err(); err != nil {
 		return nil, errorutil.Wrap(err, "context canceled while setting up batch")
 	}
 
+	// Perform the Fetch outside the lock to avoid holding the mutex during network I/O.
 	batch, err := jc.consumer.Fetch(batchCount, jetstream.FetchMaxWait(batchTimeout))
 	if err != nil {
 		if errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionDraining) {
@@ -279,8 +280,17 @@ func (jc *jetstreamConsumer) setupActiveBatch(ctx context.Context, batchCount in
 		return nil, errorutil.Wrap(err, "failed to setup fetch from consumer")
 	}
 
+	// Re-acquire lock to store the batch, checking again in case of a race.
+	jc.mu.Lock()
+	if jc.activeBatch != nil {
+		// Another goroutine won the race; use its batch.
+		existing := jc.activeBatch
+		jc.mu.Unlock()
+		return existing, nil
+	}
 	jc.activeBatch = batch
-	return jc.activeBatch, nil
+	jc.mu.Unlock()
+	return batch, nil
 }
 
 func (jc *jetstreamConsumer) clearActiveBatch() {
@@ -314,22 +324,26 @@ func (jc *jetstreamConsumer) pullMessages(ctx context.Context, batchCount int, b
 				return messages, nil
 			}
 
-			err = activeBatch.Error()
-			if err != nil {
-				// Clear the batch on error to allow retry on next call
-				jc.clearActiveBatch()
-				return messages, errorutil.Wrap(err, "batch fetch error")
-			}
-
+			// Decode and append the message first so it is not lost if the
+			// batch has an error or if we need to return early.
 			drvMsg, err0 := decodeJsMessage(msg)
 			if err0 != nil {
+				// Terminate poison messages to prevent infinite redelivery.
+				_ = msg.Term()
 				continue
 			}
 			messages = append(messages, drvMsg)
 
+			// Check for batch-level errors after processing the current message.
+			if batchErr := activeBatch.Error(); batchErr != nil {
+				// Clear the batch on error to allow retry on next call
+				jc.clearActiveBatch()
+				return messages, errorutil.Wrap(batchErr, "batch fetch error")
+			}
+
 			metadata, err0 := msg.Metadata()
 			if err0 != nil {
-				continue
+				return messages, nil
 			}
 
 			if len(messages) >= batchCount || metadata.NumPending == 0 {
