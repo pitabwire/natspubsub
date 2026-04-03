@@ -67,3 +67,4 @@ terraform.tfvars
 *.un~
 Session.vim
 .netrwhist
+WORK_STATE.md
